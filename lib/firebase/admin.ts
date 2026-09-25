@@ -24,6 +24,7 @@
 import {
   type App,
   applicationDefault,
+  cert,
   getApp,
   getApps,
   initializeApp,
@@ -36,10 +37,33 @@ function initAdmin(): App {
     return getApp()
   }
 
-  // Uses GOOGLE_APPLICATION_CREDENTIALS env var automatically (ADC).
+  const projectId = process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID
+
+  // Local: GOOGLE_APPLICATION_CREDENTIALS points to a service-account JSON file.
+  if (process.env.GOOGLE_APPLICATION_CREDENTIALS) {
+    return initializeApp({
+      credential: applicationDefault(),
+      projectId,
+    })
+  }
+
+  // Vercel / environments without a credentials file on disk:
+  // Use explicit service-account fields passed as env vars.
+  const clientEmail = process.env.FIREBASE_ADMIN_CLIENT_EMAIL
+  const privateKey = process.env.FIREBASE_ADMIN_PRIVATE_KEY?.replace(
+    /\\n/g,
+    '\n',
+  )
+
+  if (!clientEmail || !privateKey) {
+    throw new Error(
+      'Firebase Admin: set GOOGLE_APPLICATION_CREDENTIALS *or* both ' +
+        'FIREBASE_ADMIN_CLIENT_EMAIL and FIREBASE_ADMIN_PRIVATE_KEY.',
+    )
+  }
+
   return initializeApp({
-    credential: applicationDefault(),
-    projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
+    credential: cert({ projectId, clientEmail, privateKey }),
   })
 }
 
