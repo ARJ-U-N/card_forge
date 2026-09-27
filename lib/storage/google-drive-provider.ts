@@ -38,11 +38,12 @@ async function fetchWithRetry(
 }
 
 export class GoogleDriveProvider implements StorageProvider {
-  async upload(workspaceId: string, file: File, path: string): Promise<UploadResult> {
+  async upload(workspaceId: string, file: File, path: string, collegeName?: string): Promise<UploadResult> {
     const formData = new FormData()
     formData.append('file', file)
     formData.append('workspaceId', workspaceId)
     formData.append('path', path)
+    if (collegeName) formData.append('collegeName', collegeName)
 
     const res = await fetchWithRetry('/api/drive/upload', {
       method: 'POST',

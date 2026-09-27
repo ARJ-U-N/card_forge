@@ -478,6 +478,7 @@ export function FolderDetailView({ folderId }: Props) {
         member={editMember}
         tableColumns={folder?.tableColumns}
         tableColumnTypes={folder?.tableColumnTypes}
+        collegeName={folder?.name}
       />
 
       <QuickAddDialog
@@ -555,6 +556,7 @@ export function FolderDetailView({ folderId }: Props) {
         subfolderName={
           subfolders.find((sf) => sf.id === selectedSubfolder)?.name ?? 'Root'
         }
+        collegeName={folder?.name}
       />
 
       {/* Submit / Lock confirmation */}

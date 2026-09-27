@@ -82,9 +82,10 @@ async function uploadImage(
   workspaceId: string,
   file: File,
   path: string,
+  collegeName?: string,
 ): Promise<string> {
   try {
-    const result = await storage.upload(workspaceId, file, `members/${path}`)
+    const result = await storage.upload(workspaceId, file, path, collegeName)
     return result.url
   } catch {
     // If Drive is not configured, fall back to base64
@@ -110,6 +111,8 @@ interface Props {
   imageColumns: string[]
   /** Display name of the currently selected subfolder */
   subfolderName: string
+  /** Human-readable College name for the Google Drive folder */
+  collegeName?: string
 }
 
 export function BulkImageDialog({
@@ -119,6 +122,7 @@ export function BulkImageDialog({
   members,
   imageColumns,
   subfolderName,
+  collegeName,
 }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -209,8 +213,11 @@ export function BulkImageDialog({
       setProgress({ current: i + 1, total })
 
       try {
-        const uploadPath = IMAGE_UPLOAD_PATHS[effectiveColumn] ?? 'images'
-        const url = await uploadImage(workspaceId, file, uploadPath)
+        // Drive path: {subfolderName}/{columnName}
+        const drivePath = subfolderName && subfolderName !== 'Root'
+          ? `${subfolderName}/${effectiveColumn}`
+          : effectiveColumn
+        const url = await uploadImage(workspaceId, file, drivePath, collegeName)
 
         // Determine where this column is stored
         if (KNOWN_IMAGE_FIELDS.has(effectiveColumn)) {

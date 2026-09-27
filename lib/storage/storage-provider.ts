@@ -27,10 +27,11 @@ export interface StorageProvider {
    * Upload a file.
    * @param workspaceId  Workspace that owns the file
    * @param file         The file to upload
-   * @param path         Logical path within the workspace, e.g. "members/profiles"
+   * @param path         Logical path within the workspace, e.g. "BCA/profileImage"
+   * @param collegeName  Optional human-readable name for the workspace Drive folder
    * @returns            Stable file reference
    */
-  upload(workspaceId: string, file: File, path: string): Promise<UploadResult>
+  upload(workspaceId: string, file: File, path: string, collegeName?: string): Promise<UploadResult>
 
   /**
    * Get a URL that the browser can use to display/load the file.

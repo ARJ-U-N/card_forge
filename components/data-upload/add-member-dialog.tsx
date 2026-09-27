@@ -50,15 +50,18 @@ interface Props {
   tableColumns?: string[]
   /** Per-column type metadata from the folder. Determines which columns are image columns. */
   tableColumnTypes?: Record<string, 'text' | 'image'>
+  /** Human-readable College name for the Google Drive folder */
+  collegeName?: string
 }
 
 async function uploadImage(
   workspaceId: string,
   file: File,
   path: string,
+  collegeName?: string,
 ): Promise<string> {
   try {
-    const result = await storage.upload(workspaceId, file, `members/${path}`)
+    const result = await storage.upload(workspaceId, file, path, collegeName)
     return result.url
   } catch {
     // If Drive is not configured, fall back to base64
@@ -94,10 +97,16 @@ function DynamicAddMemberForm({
   member,
   tableColumns,
   tableColumnTypes,
+  collegeName,
 }: Required<Pick<Props, 'tableColumns'>> & Omit<Props, 'tableColumns'>) {
   const isEdit = !!member
   const [saving, setSaving] = useState(false)
   const [subfolderId, setSubfolderId] = useState<string>('__none__')
+
+  // Derive the subfolder's human-readable name for Google Drive path
+  const subfolderDriveName = subfolderId !== '__none__'
+    ? subfolders.find((sf) => sf.id === subfolderId)?.name
+    : undefined
 
   // Text field values keyed by column name
   const [values, setValues] = useState<Record<string, string>>({})
@@ -119,9 +128,12 @@ function DynamicAddMemberForm({
       const vals: Record<string, string> = {}
       const previews: Record<string, string> = {}
       for (const col of tableColumns) {
-        if (IMAGE_FIELDS.has(col)) {
-          // Image fields are stored on the member directly
-          previews[col] = (member as Record<string, unknown>)[col] as string ?? ''
+        if (tableColumnTypes?.[col] === 'image') {
+          // Known image fields are stored on the member directly;
+          // custom image columns are stored in customFields.
+          previews[col] = IMAGE_FIELDS.has(col)
+            ? ((member as Record<string, unknown>)[col] as string ?? '')
+            : (member.customFields?.[col] ?? '')
         } else {
           vals[col] = member.customFields?.[col] ?? ''
         }
@@ -158,10 +170,15 @@ function DynamicAddMemberForm({
       const imageUrls: Record<string, string> = {}
       for (const col of imageColumns) {
         if (imageFiles[col]) {
-          const uploadPath = IMAGE_UPLOAD_PATHS[col] ?? 'images'
-          imageUrls[col] = await uploadImage(workspaceId, imageFiles[col], uploadPath)
+          // Drive path: {subfolderName}/{columnName} or just {columnName} if no subfolder
+          const drivePath = subfolderDriveName ? `${subfolderDriveName}/${col}` : col
+          imageUrls[col] = await uploadImage(workspaceId, imageFiles[col], drivePath, collegeName)
         } else if (isEdit && member) {
-          imageUrls[col] = (member as Record<string, unknown>)[col] as string ?? ''
+          // Known image fields live on the member directly;
+          // custom image columns live in customFields.
+          imageUrls[col] = IMAGE_FIELDS.has(col)
+            ? ((member as Record<string, unknown>)[col] as string ?? '')
+            : (member.customFields?.[col] ?? '')
         }
       }
 
@@ -186,8 +203,14 @@ function DynamicAddMemberForm({
         signature: imageUrls.signature ?? '',
         fingerprint: imageUrls.fingerprint ?? '',
         divisionLogo: imageUrls.divisionLogo ?? '',
-        // All text data stored here under the original column names
-        customFields: { ...values },
+        // Text data + custom image URLs stored here under the original column names
+        customFields: {
+          ...values,
+          // Merge custom image column URLs into customFields
+          ...Object.fromEntries(
+            Object.entries(imageUrls).filter(([col]) => !IMAGE_FIELDS.has(col)),
+          ),
+        },
       }
 
       if (isEdit && member) {

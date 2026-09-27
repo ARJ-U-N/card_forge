@@ -217,11 +217,18 @@ export async function getOrCreateRootFolder(): Promise<string> {
 
 /**
  * Find or create a workspace folder under the CardForge root.
- * Structure: CardForge/{workspaceId}/
+ * Structure: CardForge/{collegeName}/
+ *
+ * @param workspaceId  Firestore workspace document ID (internal identity)
+ * @param collegeName  Human-readable College name used as the Drive folder name.
+ *                     Falls back to workspaceId when not provided.
  */
-export async function getOrCreateWorkspaceFolder(workspaceId: string): Promise<string> {
+export async function getOrCreateWorkspaceFolder(
+  workspaceId: string,
+  collegeName?: string,
+): Promise<string> {
   const rootId = await getOrCreateRootFolder()
-  return findOrCreateFolder(workspaceId, rootId)
+  return findOrCreateFolder(collegeName || workspaceId, rootId)
 }
 
 /**
