@@ -34,6 +34,11 @@
     "xlsx": "^0.18.5",
     "zod": "^4.5.4"
   },
+  "overrides": {
+    "jwks-rsa": {
+      "jose": "5.10.0"
+    }
+  },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^24",
