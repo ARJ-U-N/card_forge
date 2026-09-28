@@ -10,6 +10,57 @@ import type {
   Member,
 } from '@/lib/models/types'
 
+// ---------------------------------------------------------------------------
+// Custom font registry — loaded on-demand and cached for the session
+// ---------------------------------------------------------------------------
+
+const _loadedFonts = new Set<string>()
+
+async function ensureCustomFont(el: CanvasElement): Promise<void> {
+  const fontFamily = (el.props.fontFamily as string) ?? ''
+  const fontData = (el.props.customFontData as string) ?? ''
+  if (!fontData || !fontFamily) return
+  if (_loadedFonts.has(fontFamily)) return
+
+  try {
+    const font = new FontFace(fontFamily, `url(${fontData})`)
+    const loaded = await font.load()
+    ;(document.fonts as FontFaceSet).add(loaded)
+    _loadedFonts.add(fontFamily)
+  } catch {
+    // Font load failed — fall back to sans-serif
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Polygon path helper — generates regular N-sided polygon path on canvas
+// ---------------------------------------------------------------------------
+
+function polygonPath(
+  ctx: CanvasRenderingContext2D,
+  cx: number, cy: number, rx: number, ry: number, sides: number,
+) {
+  ctx.beginPath()
+  const angleOffset = -Math.PI / 2 // start at top
+  for (let i = 0; i < sides; i++) {
+    const angle = angleOffset + (2 * Math.PI * i) / sides
+    const px = cx + rx * Math.cos(angle)
+    const py = cy + ry * Math.sin(angle)
+    if (i === 0) ctx.moveTo(px, py)
+    else ctx.lineTo(px, py)
+  }
+  ctx.closePath()
+}
+
+/** Map shape name to number of polygon sides, or null for non-polygon shapes */
+function shapeSides(shape: string): number | null {
+  const map: Record<string, number> = {
+    pentagon: 5, hexagon: 6, heptagon: 7, octagon: 8,
+    nonagon: 9, decagon: 10,
+  }
+  return map[shape] ?? null
+}
+
 const CARD_W = 324
 const CARD_H = 204
 
@@ -154,6 +205,7 @@ async function renderSide(
 
     switch (el.type) {
       case 'text': {
+        await ensureCustomFont(el)
         const text = (el.props.text as string) ?? ''
         const fontSize = (el.props.fontSize as number) ?? 14
         const fontWeight = (el.props.fontWeight as string) ?? 'normal'
@@ -180,6 +232,7 @@ async function renderSide(
       }
 
       case 'field': {
+        await ensureCustomFont(el)
         const fieldName = (el.props.fieldName as string) ?? ''
         const label = (el.props.label as string) ?? ''
         const resolvedText = label + resolveDynamicText(member, fieldName)
@@ -206,7 +259,21 @@ async function renderSide(
       case 'image': {
         const borderSize = (el.props.borderSize as number) ?? 0
         const borderColor = (el.props.borderColor as string) ?? '#000'
-        const borderRadius = (el.props.borderRadius as number) ?? 0
+
+        // Independent corner radii — backward compatible with single borderRadius
+        const legacyR = (el.props.borderRadius as number) ?? 0
+        const rTL = (el.props.borderRadiusTL as number) ?? legacyR
+        const rTR = (el.props.borderRadiusTR as number) ?? legacyR
+        const rBR = (el.props.borderRadiusBR as number) ?? legacyR
+        const rBL = (el.props.borderRadiusBL as number) ?? legacyR
+        const hasRadius = rTL > 0 || rTR > 0 || rBR > 0 || rBL > 0
+
+        // Shape support
+        const imageShape = (el.props.imageShape as string) ?? 'rectangle'
+        const sides = shapeSides(imageShape)
+        const isCircle = imageShape === 'circle'
+        const isOval = imageShape === 'oval'
+        const isPolygon = sides !== null
 
         let imgSrc = ''
 
@@ -226,20 +293,53 @@ async function renderSide(
           imgSrc = (el.props.src as string) ?? ''
         }
 
-        // Draw border
+        // Helper: build clip path based on shape
+        const applyClip = () => {
+          if (isCircle || isOval) {
+            ctx.beginPath()
+            ctx.ellipse(
+              el.x + el.width / 2, el.y + el.height / 2,
+              el.width / 2, el.height / 2,
+              0, 0, Math.PI * 2,
+            )
+            ctx.closePath()
+          } else if (isPolygon) {
+            polygonPath(ctx, el.x + el.width / 2, el.y + el.height / 2, el.width / 2, el.height / 2, sides)
+          } else if (hasRadius) {
+            roundRectIndep(ctx, el.x, el.y, el.width, el.height, rTL, rTR, rBR, rBL)
+          }
+        }
+
+        // Draw border following the shape
         if (borderSize > 0) {
           ctx.strokeStyle = borderColor
           ctx.lineWidth = borderSize
-          ctx.strokeRect(el.x, el.y, el.width, el.height)
+          if (isCircle || isOval) {
+            ctx.beginPath()
+            ctx.ellipse(
+              el.x + el.width / 2, el.y + el.height / 2,
+              el.width / 2, el.height / 2,
+              0, 0, Math.PI * 2,
+            )
+            ctx.stroke()
+          } else if (isPolygon) {
+            polygonPath(ctx, el.x + el.width / 2, el.y + el.height / 2, el.width / 2, el.height / 2, sides)
+            ctx.stroke()
+          } else if (hasRadius) {
+            roundRectIndep(ctx, el.x, el.y, el.width, el.height, rTL, rTR, rBR, rBL)
+            ctx.stroke()
+          } else {
+            ctx.strokeRect(el.x, el.y, el.width, el.height)
+          }
         }
 
-        // Draw image
+        // Draw image with clip
         if (imgSrc) {
           const img = await loadImage(imgSrc)
           if (img) {
             ctx.save()
-            if (borderRadius > 0) {
-              roundRect(ctx, el.x, el.y, el.width, el.height, borderRadius)
+            if (isCircle || isOval || isPolygon || hasRadius) {
+              applyClip()
               ctx.clip()
             }
             ctx.drawImage(img, el.x, el.y, el.width, el.height)
@@ -310,6 +410,29 @@ function roundRect(
   ctx.quadraticCurveTo(x, y + h, x, y + h - r)
   ctx.lineTo(x, y + r)
   ctx.quadraticCurveTo(x, y, x + r, y)
+  ctx.closePath()
+}
+
+/** Round rect with independent corner radii (TL, TR, BR, BL) */
+function roundRectIndep(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  tl: number, tr: number, br: number, bl: number,
+) {
+  tl = Math.min(tl, w / 2, h / 2)
+  tr = Math.min(tr, w / 2, h / 2)
+  br = Math.min(br, w / 2, h / 2)
+  bl = Math.min(bl, w / 2, h / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + tl, y)
+  ctx.lineTo(x + w - tr, y)
+  ctx.quadraticCurveTo(x + w, y, x + w, y + tr)
+  ctx.lineTo(x + w, y + h - br)
+  ctx.quadraticCurveTo(x + w, y + h, x + w - br, y + h)
+  ctx.lineTo(x + bl, y + h)
+  ctx.quadraticCurveTo(x, y + h, x, y + h - bl)
+  ctx.lineTo(x, y + tl)
+  ctx.quadraticCurveTo(x, y, x + tl, y)
   ctx.closePath()
 }
 
