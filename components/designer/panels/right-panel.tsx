@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -9,10 +9,13 @@ import {
   EyeOffIcon,
   GripVerticalIcon,
   LayersIcon,
+  Link2Icon,
   LockIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
+  Unlink2Icon,
   UnlockIcon,
+  UploadIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -45,6 +48,18 @@ const FONTS = [
   'Times New Roman', 'Courier New', 'Verdana', 'Trebuchet MS',
 ]
 
+const IMAGE_SHAPES = [
+  { value: 'rectangle', label: 'Rectangle' },
+  { value: 'circle', label: 'Circle' },
+  { value: 'oval', label: 'Oval' },
+  { value: 'pentagon', label: 'Pentagon' },
+  { value: 'hexagon', label: 'Hexagon' },
+  { value: 'heptagon', label: 'Heptagon' },
+  { value: 'octagon', label: 'Octagon' },
+  { value: 'nonagon', label: 'Nonagon' },
+  { value: 'decagon', label: 'Decagon' },
+] as const
+
 export function RightPanel({
   activeDoc,
   selectedElementId,
@@ -55,6 +70,9 @@ export function RightPanel({
   onReorderElement,
 }: Props) {
   const [activeTab, setActiveTab] = useState<RightTab>('customize')
+  const [radiusLocked, setRadiusLocked] = useState(true)
+  const [customFonts, setCustomFonts] = useState<string[]>([])
+  const fontInputRef = useRef<HTMLInputElement>(null)
 
   const el = selectedElementId
     ? activeDoc.elements.find((e) => e.id === selectedElementId) ?? null
@@ -85,6 +103,75 @@ export function RightPanel({
     }
     input.click()
   }
+
+  // ── Corner radius helpers ───────────────────────────────────────────
+  const handleCornerChange = (corner: 'TL' | 'TR' | 'BR' | 'BL', value: number) => {
+    if (!el) return
+    if (radiusLocked) {
+      // Update all four corners to the same value
+      onUpdateElement(el.id, {
+        props: {
+          ...el.props,
+          borderRadiusTL: value,
+          borderRadiusTR: value,
+          borderRadiusBR: value,
+          borderRadiusBL: value,
+          borderRadius: value, // keep legacy field in sync
+        },
+      })
+    } else {
+      updateProp(`borderRadius${corner}`, value)
+    }
+  }
+
+  // ── Font import handler ─────────────────────────────────────────────
+  const handleFontImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onloadend = () => {
+      const dataUrl = reader.result as string
+      // Derive font family name from filename (strip extension)
+      const fontName = file.name.replace(/\.(ttf|otf|woff2?|TTF|OTF|WOFF2?)$/, '').replace(/[^a-zA-Z0-9\s-]/g, '')
+      const familyName = `Custom-${fontName}`
+
+      // Load font into the browser immediately
+      try {
+        const font = new FontFace(familyName, `url(${dataUrl})`)
+        font.load().then((loaded) => {
+          ; (document.fonts as FontFaceSet).add(loaded)
+          setCustomFonts((prev) => prev.includes(familyName) ? prev : [...prev, familyName])
+          // Apply the font and save the data URL for persistence
+          if (el) {
+            onUpdateElement(el.id, {
+              props: {
+                ...el.props,
+                fontFamily: familyName,
+                customFontData: dataUrl,
+                customFontName: file.name,
+              },
+            })
+          }
+        }).catch(() => {
+          alert('Failed to load font file. Please ensure it is a valid font.')
+        })
+      } catch {
+        alert('Failed to load font file. Please ensure it is a valid font.')
+      }
+    }
+    reader.readAsDataURL(file)
+    e.target.value = ''
+  }
+
+  // Collect custom fonts already in use on this document for the selector
+  const docCustomFonts = new Set<string>()
+  activeDoc.elements.forEach((e) => {
+    if (e.props.customFontData && e.props.fontFamily) {
+      docCustomFonts.add(e.props.fontFamily as string)
+    }
+  })
+  // Merge with session-imported custom fonts
+  const allCustomFonts = Array.from(new Set([...customFonts, ...docCustomFonts]))
 
   return (
     <div className="flex w-60 shrink-0 flex-col border-l bg-card">
@@ -192,14 +279,69 @@ export function RightPanel({
                     {/* Font family */}
                     <div className="flex flex-col gap-0.5">
                       <label className="text-[10px] text-muted-foreground">Font</label>
-                      <Select value={(el.props.fontFamily as string) ?? 'Inter'} onValueChange={(v) => updateProp('fontFamily', v)}>
+                      <Select value={(el.props.fontFamily as string) ?? 'Inter'} onValueChange={(v) => {
+                        // When selecting a custom font from the list, copy the customFontData from the element that owns it
+                        const sourceEl = activeDoc.elements.find((e) => e.props.fontFamily === v && e.props.customFontData)
+                        if (sourceEl) {
+                          onUpdateElement(el.id, {
+                            props: {
+                              ...el.props,
+                              fontFamily: v,
+                              customFontData: sourceEl.props.customFontData,
+                              customFontName: sourceEl.props.customFontName,
+                            },
+                          })
+                        } else {
+                          // Built-in font — clear custom data
+                          onUpdateElement(el.id, {
+                            props: {
+                              ...el.props,
+                              fontFamily: v,
+                              customFontData: undefined,
+                              customFontName: undefined,
+                            },
+                          })
+                        }
+                      }}>
                         <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                         <SelectContent>
                           {FONTS.map((f) => (
                             <SelectItem key={f} value={f}><span style={{ fontFamily: f }}>{f}</span></SelectItem>
                           ))}
+                          {allCustomFonts.length > 0 && (
+                            <>
+                              <div className="px-2 py-1 text-[9px] text-muted-foreground uppercase tracking-wider border-t mt-1 pt-1">Imported Fonts</div>
+                              {allCustomFonts.map((f) => (
+                                <SelectItem key={f} value={f}><span style={{ fontFamily: f }}>{f}</span></SelectItem>
+                              ))}
+                            </>
+                          )}
                         </SelectContent>
                       </Select>
+                    </div>
+
+                    {/* Import Font */}
+                    <div className="flex flex-col gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => fontInputRef.current?.click()}
+                        className="flex items-center gap-1.5 rounded-md border border-dashed px-2 py-1.5 text-[10px] text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors"
+                      >
+                        <UploadIcon className="size-3" />
+                        Import Font (.ttf, .otf, .woff, .woff2)
+                      </button>
+                      <input
+                        ref={fontInputRef}
+                        type="file"
+                        accept=".ttf,.otf,.woff,.woff2"
+                        className="hidden"
+                        onChange={handleFontImport}
+                      />
+                      {el.props.customFontName && (
+                        <span className="text-[9px] text-muted-foreground truncate">
+                          Using: {String(el.props.customFontName)}
+                        </span>
+                      )}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2">
@@ -334,6 +476,19 @@ export function RightPanel({
                       Browse New Image
                     </Button>
 
+                    {/* Shape */}
+                    <div className="flex flex-col gap-0.5">
+                      <label className="text-[10px] text-muted-foreground">Shape</label>
+                      <Select value={(el.props.imageShape as string) ?? 'rectangle'} onValueChange={(v) => updateProp('imageShape', v)}>
+                        <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {IMAGE_SHAPES.map((s) => (
+                            <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+
                     {/* Border */}
                     <div className="grid grid-cols-2 gap-2">
                       <div className="flex flex-col gap-0.5">
@@ -349,10 +504,42 @@ export function RightPanel({
                       </div>
                     </div>
 
-                    <div className="flex flex-col gap-0.5">
-                      <label className="text-[10px] text-muted-foreground">Border Radius</label>
-                      <Input type="number" value={(el.props.borderRadius as number) ?? 0} className="h-7 text-xs" min={0}
-                        onChange={(e) => updateProp('borderRadius', Number(e.target.value))} />
+                    {/* Independent Corner Radius */}
+                    <div className="flex flex-col gap-1">
+                      <div className="flex items-center justify-between">
+                        <label className="text-[10px] text-muted-foreground">Corner Radius</label>
+                        <button
+                          type="button"
+                          onClick={() => setRadiusLocked((prev) => !prev)}
+                          className={cn(
+                            'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] transition-colors',
+                            radiusLocked
+                              ? 'bg-primary/10 text-primary'
+                              : 'bg-muted text-muted-foreground hover:text-foreground',
+                          )}
+                          title={radiusLocked ? 'Linked — all corners change together' : 'Unlinked — each corner is independent'}
+                        >
+                          {radiusLocked ? <Link2Icon className="size-3" /> : <Unlink2Icon className="size-3" />}
+                          {radiusLocked ? 'Linked' : 'Independent'}
+                        </button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(['TL', 'TR', 'BL', 'BL_DUMMY'] as const).map((corner, idx) => {
+                          // We render TL, TR on top row and BL, BR on bottom row
+                          const actualCorner = idx === 0 ? 'TL' : idx === 1 ? 'TR' : idx === 2 ? 'BL' : 'BR'
+                          const label = idx === 0 ? 'Top Left' : idx === 1 ? 'Top Right' : idx === 2 ? 'Bottom Left' : 'Bottom Right'
+                          const legacyR = (el.props.borderRadius as number) ?? 0
+                          const propKey = `borderRadius${actualCorner}` as string
+                          const val = (el.props[propKey] as number) ?? legacyR
+                          return (
+                            <div key={actualCorner} className="flex flex-col gap-0.5">
+                              <label className="text-[9px] text-muted-foreground">{label}</label>
+                              <Input type="number" value={val} className="h-6 text-[10px]" min={0}
+                                onChange={(e) => handleCornerChange(actualCorner as 'TL' | 'TR' | 'BR' | 'BL', Number(e.target.value))} />
+                            </div>
+                          )
+                        })}
+                      </div>
                     </div>
 
                     <Separator />

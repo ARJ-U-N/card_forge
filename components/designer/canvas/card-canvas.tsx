@@ -12,6 +12,53 @@ import type {
 const CARD_W = 324
 const CARD_H = 204
 
+// ---------------------------------------------------------------------------
+// CSS clip-path helpers for shape support
+// ---------------------------------------------------------------------------
+
+/** Map shape name to polygon side count, or null for non-polygon shapes */
+function shapeSides(shape: string): number | null {
+  const map: Record<string, number> = {
+    pentagon: 5, hexagon: 6, heptagon: 7, octagon: 8,
+    nonagon: 9, decagon: 10,
+  }
+  return map[shape] ?? null
+}
+
+/** Generate CSS polygon() clip-path for a regular N-sided polygon */
+function cssPolygon(sides: number): string {
+  const points: string[] = []
+  const angleOffset = -Math.PI / 2
+  for (let i = 0; i < sides; i++) {
+    const angle = angleOffset + (2 * Math.PI * i) / sides
+    const x = 50 + 50 * Math.cos(angle)
+    const y = 50 + 50 * Math.sin(angle)
+    points.push(`${x.toFixed(2)}% ${y.toFixed(2)}%`)
+  }
+  return `polygon(${points.join(', ')})`
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Custom font loader for design preview
+// ---------------------------------------------------------------------------
+
+const _previewLoadedFonts = new Set<string>()
+
+function ensurePreviewFont(fontFamily: string, fontData: string) {
+  if (!fontFamily || !fontData || _previewLoadedFonts.has(fontFamily)) return
+  try {
+    const font = new FontFace(fontFamily, `url(${fontData})`)
+    font.load().then((loaded) => {
+      ; (document.fonts as FontFaceSet).add(loaded)
+      _previewLoadedFonts.add(fontFamily)
+    }).catch(() => { })
+  } catch {
+    // ignore
+  }
+}
+
 type DragMode = 'move' | 'resize-se' | 'resize-ne' | 'resize-sw' | 'resize-nw' | 'resize-e' | 'resize-w' | 'resize-n' | 'resize-s'
 
 interface DragState {
@@ -139,6 +186,13 @@ export function CardCanvas({
     )
   }
 
+  // Load custom fonts for any text/field elements that use them
+  for (const item of sorted) {
+    if ((item.type === 'text' || item.type === 'field') && item.props.customFontData) {
+      ensurePreviewFont(item.props.fontFamily as string, item.props.customFontData as string)
+    }
+  }
+
   // ── Element renderers ─────────────────────────────────────────────────
   const renderElement = (el: CanvasElement) => {
     if (!el.visible) return null
@@ -211,11 +265,47 @@ export function CardCanvas({
         const isBarcode = !!el.props.barcode
         const isDynamic = !!el.props.dynamic
 
+        // Independent corner radii (backward compatible)
+        const legacyR = (borderRadius as number)
+        const rTL = (el.props.borderRadiusTL as number) ?? legacyR
+        const rTR = (el.props.borderRadiusTR as number) ?? legacyR
+        const rBR = (el.props.borderRadiusBR as number) ?? legacyR
+        const rBL = (el.props.borderRadiusBL as number) ?? legacyR
+
+        // Shape support
+        const imageShape = (el.props.imageShape as string) ?? 'rectangle'
+        const sides = shapeSides(imageShape)
+        const isCircle = imageShape === 'circle'
+        const isOval = imageShape === 'oval'
+        const isPolygon = sides !== null
+
+
+
+        // Border styling for non-polygon shapes
+        const borderCss: React.CSSProperties = {}
+        if (isCircle || isOval) {
+          borderCss.borderRadius = '50%'
+          if (borderSize > 0) {
+            borderCss.border = `${borderSize}px solid ${borderColor}`
+          }
+        } else if (isPolygon) {
+          // For polygons we cannot use CSS border, so we use an SVG overlay
+          if (borderSize > 0) {
+            // handled below
+          }
+        } else {
+          // Rectangle
+          borderCss.borderRadius = `${rTL}px ${rTR}px ${rBR}px ${rBL}px`
+          if (borderSize > 0) {
+            borderCss.border = `${borderSize}px solid ${borderColor}`
+          }
+        }
+
         return (
           <div key={el.id} style={{
             ...wrapperStyle,
-            border: borderSize > 0 ? `${borderSize}px solid ${borderColor}` : undefined,
-            borderRadius,
+            ...(!isPolygon ? borderCss : {}),
+            ...(isPolygon ? { clipPath: cssPolygon(sides!) } : {}),
           }}
             className={cn(
               'select-none overflow-hidden',
@@ -232,7 +322,8 @@ export function CardCanvas({
                 width={el.width} height={el.height}
               />
             ) : el.props.src && !el.props.placeholder ? (
-              <img src={el.props.src as string} alt="" className="size-full object-cover" draggable={false} />
+              <img src={el.props.src as string} alt="" className="size-full object-cover" draggable={false}
+                style={isPolygon ? {} : (isCircle || isOval) ? { borderRadius: '50%' } : {}} />
             ) : (
               <div className="flex size-full flex-col items-center justify-center gap-0.5 bg-muted/60 border border-dashed border-muted-foreground/30">
                 {isDynamic ? (
@@ -252,6 +343,20 @@ export function CardCanvas({
                   </svg>
                 )}
               </div>
+            )}
+            {/* Polygon border overlay */}
+            {isPolygon && borderSize > 0 && (
+              <svg className="absolute inset-0 size-full pointer-events-none" viewBox={`0 0 ${el.width} ${el.height}`} preserveAspectRatio="none">
+                <polygon
+                  points={Array.from({ length: sides! }, (_, i) => {
+                    const angle = -Math.PI / 2 + (2 * Math.PI * i) / sides!
+                    return `${el.width / 2 + (el.width / 2) * Math.cos(angle)},${el.height / 2 + (el.height / 2) * Math.sin(angle)}`
+                  }).join(' ')}
+                  fill="none"
+                  stroke={borderColor}
+                  strokeWidth={borderSize}
+                />
+              </svg>
             )}
             {isSelected && <ResizeHandles el={el} />}
           </div>
