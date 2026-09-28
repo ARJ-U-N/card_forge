@@ -40,6 +40,7 @@ import {
   generatePDF,
   bulkExportImages,
   DEFAULT_PRINT_CONFIG,
+  migratePrintConfig,
   type PrintConfig,
   type PaperSize,
   type PaperOrientation,
@@ -72,7 +73,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
 
   // ── Layout calculation ────────────────────────────────────────────────
   const layout = useMemo(() => calculateLayout(config, cardOrientation), [config, cardOrientation])
-  const pages = useMemo(() => distributeCards(cards, layout, config.printMode), [cards, layout, config.printMode])
+  const pages = useMemo(() => distributeCards(cards, layout, config.printMode, config.orientation), [cards, layout, config.printMode, config.orientation])
   const totalPages = pages.length
   const currentPageData = pages[currentPage - 1] ?? null
 
@@ -192,12 +193,20 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
 
             <Separator />
 
-            {/* Gutter & Grid */}
+            {/* Gaps & Grid */}
             <Section title="Grid">
-              <Row label="Gutter (mm)">
-                <Input type="number" min={0} max={20} value={config.gutter} className="h-7 text-xs"
-                  onChange={(e) => update('gutter', Number(e.target.value))} />
-              </Row>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">H Gap (mm)</label>
+                  <Input type="number" min={0} max={20} value={config.gutterH} className="h-6 text-xs"
+                    onChange={(e) => update('gutterH', Number(e.target.value))} />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">V Gap (mm)</label>
+                  <Input type="number" min={0} max={20} value={config.gutterV} className="h-6 text-xs"
+                    onChange={(e) => update('gutterV', Number(e.target.value))} />
+                </div>
+              </div>
               <div className="flex items-center gap-1.5">
                 <Checkbox id="autoLayout" checked={config.autoLayout}
                   onCheckedChange={(c) => update('autoLayout', c === true)} />
@@ -245,6 +254,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                 <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="front-only">Front Only</SelectItem>
+                  <SelectItem value="back-only">Back Only</SelectItem>
                   <SelectItem value="duplex">Front + Back (Duplex)</SelectItem>
                   <SelectItem value="side-by-side">Front + Back (Side-by-Side)</SelectItem>
                 </SelectContent>
@@ -365,7 +375,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                             alt={`${card.memberName} back`}
                             className="absolute"
                             style={{
-                              left: (slot.x + slot.w + config.gutter) * previewScale,
+                              left: (slot.x + slot.w + config.gutterH) * previewScale,
                               top: slot.y * previewScale,
                               width: slot.w * previewScale,
                               height: slot.h * previewScale,
@@ -374,7 +384,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                           />
                           {config.cardBorders && (
                             <div className="absolute border border-gray-300" style={{
-                              left: (slot.x + slot.w + config.gutter) * previewScale,
+                              left: (slot.x + slot.w + config.gutterH) * previewScale,
                               top: slot.y * previewScale,
                               width: slot.w * previewScale,
                               height: slot.h * previewScale,

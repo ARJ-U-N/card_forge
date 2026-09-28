@@ -10,13 +10,18 @@ import type { RenderedCard } from './card-renderer'
 
 export type PaperSize = 'a4' | 'letter' | 'legal'
 export type PaperOrientation = 'portrait' | 'landscape'
-export type PrintMode = 'front-only' | 'duplex' | 'side-by-side'
+export type PrintMode = 'front-only' | 'back-only' | 'duplex' | 'side-by-side'
 
 export interface PrintConfig {
   paperSize: PaperSize
   orientation: PaperOrientation
   margins: { top: number; bottom: number; left: number; right: number }
-  gutter: number
+  /** @deprecated Use gutterH / gutterV instead. Kept for backward compat. */
+  gutter?: number
+  /** Horizontal gap between cards in the same row (mm) */
+  gutterH: number
+  /** Vertical gap between rows (mm) */
+  gutterV: number
   rows: number
   columns: number
   autoLayout: boolean
@@ -25,11 +30,21 @@ export interface PrintConfig {
   printMode: PrintMode
 }
 
+/** Migrate a config that may have the old single `gutter` field */
+export function migratePrintConfig(raw: Partial<PrintConfig> & { gutter?: number }): PrintConfig {
+  const base = { ...DEFAULT_PRINT_CONFIG, ...raw }
+  // If gutterH/gutterV were not explicitly set, fall back to the old gutter
+  if (raw.gutterH === undefined && raw.gutter !== undefined) base.gutterH = raw.gutter
+  if (raw.gutterV === undefined && raw.gutter !== undefined) base.gutterV = raw.gutter
+  return base
+}
+
 export const DEFAULT_PRINT_CONFIG: PrintConfig = {
   paperSize: 'a4',
   orientation: 'portrait',
   margins: { top: 10, bottom: 10, left: 10, right: 10 },
-  gutter: 3,
+  gutterH: 3,
+  gutterV: 3,
   rows: 4,
   columns: 2,
   autoLayout: true,
@@ -79,8 +94,8 @@ export function calculateLayout(config: PrintConfig, cardOrientation: 'horizonta
   const pageW = config.orientation === 'landscape' ? paper.h : paper.w
   const pageH = config.orientation === 'landscape' ? paper.w : paper.h
 
-  const cardW = cardOrientation === 'vertical' ? CARD_H_MM : CARD_W_MM
-  const cardH = cardOrientation === 'vertical' ? CARD_W_MM : CARD_H_MM
+  let cardW = cardOrientation === 'vertical' ? CARD_H_MM : CARD_W_MM
+  let cardH = cardOrientation === 'vertical' ? CARD_W_MM : CARD_H_MM
 
   const availW = pageW - config.margins.left - config.margins.right
   const availH = pageH - config.margins.top - config.margins.bottom
@@ -88,17 +103,37 @@ export function calculateLayout(config: PrintConfig, cardOrientation: 'horizonta
   let rows = config.rows
   let cols = config.columns
 
+  const gH = config.gutterH
+  const gV = config.gutterV
+
   if (config.autoLayout) {
-    cols = Math.max(1, Math.floor((availW + config.gutter) / (cardW + config.gutter)))
-    rows = Math.max(1, Math.floor((availH + config.gutter) / (cardH + config.gutter)))
+    // Natural grid at full card size
+    cols = Math.max(1, Math.floor((availW + gH) / (cardW + gH)))
+    rows = Math.max(1, Math.floor((availH + gV) / (cardH + gV)))
+
+    // Try fitting one extra column by scaling cards down proportionally.
+    // Accept if total cards increases and cards stay ≥ 90% of original size.
+    const tryCols = cols + 1
+    const tryCardW = (availW - (tryCols - 1) * gH) / tryCols
+    if (tryCardW > 0) {
+      const scale = tryCardW / cardW
+      const tryCardH = cardH * scale
+      const tryRows = Math.max(1, Math.floor((availH + gV) / (tryCardH + gV)))
+      if (tryCols * tryRows > cols * rows && scale >= 0.90) {
+        cols = tryCols
+        rows = tryRows
+        cardW = tryCardW
+        cardH = tryCardH
+      }
+    }
   }
 
   // Clamp to fit
-  cols = Math.max(1, Math.min(cols, Math.floor((availW + config.gutter) / (cardW + config.gutter))))
-  rows = Math.max(1, Math.min(rows, Math.floor((availH + config.gutter) / (cardH + config.gutter))))
+  cols = Math.max(1, Math.min(cols, Math.floor((availW + gH) / (cardW + gH))))
+  rows = Math.max(1, Math.min(rows, Math.floor((availH + gV) / (cardH + gV))))
 
-  const totalGridW = cols * cardW + (cols - 1) * config.gutter
-  const totalGridH = rows * cardH + (rows - 1) * config.gutter
+  const totalGridW = cols * cardW + (cols - 1) * gH
+  const totalGridH = rows * cardH + (rows - 1) * gV
 
   // Center the grid
   const offsetX = config.margins.left + (availW - totalGridW) / 2
@@ -108,8 +143,8 @@ export function calculateLayout(config: PrintConfig, cardOrientation: 'horizonta
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
       slots.push({
-        x: offsetX + c * (cardW + config.gutter),
-        y: offsetY + r * (cardH + config.gutter),
+        x: offsetX + c * (cardW + gH),
+        y: offsetY + r * (cardH + gV),
         w: cardW,
         h: cardH,
       })
@@ -133,16 +168,18 @@ export function distributeCards(
   cards: RenderedCard[],
   layout: PageLayout,
   printMode: PrintMode,
+  orientation: PaperOrientation = 'portrait',
 ): PrintPage[] {
   const pages: PrintPage[] = []
   const { cardsPerPage, slots } = layout
 
-  if (printMode === 'front-only') {
+  if (printMode === 'front-only' || printMode === 'back-only') {
+    const side = printMode === 'back-only' ? 'back' : 'front'
     for (let i = 0; i < cards.length; i += cardsPerPage) {
       const chunk = cards.slice(i, i + cardsPerPage)
       pages.push({
         pageNumber: pages.length + 1,
-        side: 'front',
+        side,
         cards: chunk.map((card, idx) => ({ slot: slots[idx], card })),
       })
     }
@@ -159,8 +196,15 @@ export function distributeCards(
       const backSlots = [...slots].map((slot, idx) => {
         const row = Math.floor(idx / layout.cols)
         const col = idx % layout.cols
-        const mirroredCol = layout.cols - 1 - col
-        return slots[row * layout.cols + mirroredCol]
+        if (orientation === 'landscape') {
+          // Long-edge flip: rows reversed, columns same
+          const mirroredRow = layout.rows - 1 - row
+          return slots[mirroredRow * layout.cols + col]
+        } else {
+          // Short-edge flip (portrait): columns reversed, rows same
+          const mirroredCol = layout.cols - 1 - col
+          return slots[row * layout.cols + mirroredCol]
+        }
       })
       pages.push({
         pageNumber: pages.length + 1,
@@ -200,7 +244,7 @@ export async function generatePDF(
   const { default: jsPDF } = await import('jspdf')
 
   const layout = calculateLayout(config, cardOrientation)
-  const pages = distributeCards(cards, layout, config.printMode)
+  const pages = distributeCards(cards, layout, config.printMode, config.orientation)
 
   const pdf = new jsPDF({
     orientation: config.orientation === 'landscape' ? 'landscape' : 'portrait',
@@ -262,7 +306,7 @@ export async function generatePDF(
     // Side-by-side mode: draw back cards next to fronts
     if (config.printMode === 'side-by-side') {
       for (const { slot, card } of page.cards) {
-        const backX = slot.x + slot.w + config.gutter
+        const backX = slot.x + slot.w + config.gutterH
         if (backX + slot.w <= layout.pageW - config.margins.right) {
           try {
             pdf.addImage(card.backDataUrl, 'PNG', backX, slot.y, slot.w, slot.h)
