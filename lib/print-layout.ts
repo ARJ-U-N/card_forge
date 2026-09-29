@@ -141,13 +141,13 @@ export function calculateLayout(
   const rawH = customCardMm?.h ?? CARD_H_MM
 
   // Determine base card dimensions from the card's design orientation
-  let baseCardW = cardOrientation === 'vertical' ? rawH : rawW
-  let baseCardH = cardOrientation === 'vertical' ? rawW : rawH
+  const baseCardW = cardOrientation === 'vertical' ? rawH : rawW
+  const baseCardH = cardOrientation === 'vertical' ? rawW : rawH
 
   // For rotated-90 mode, swap the card dimensions for slot layout
   // (the slot holds the rotated card, so W↔H are swapped)
-  let cardW = isRotated90 ? baseCardH : baseCardW
-  let cardH = isRotated90 ? baseCardW : baseCardH
+  const cardW = isRotated90 ? baseCardH : baseCardW
+  const cardH = isRotated90 ? baseCardW : baseCardH
 
   const availW = pageW - config.margins.left - config.margins.right
   const availH = pageH - config.margins.top - config.margins.bottom
@@ -161,30 +161,13 @@ export function calculateLayout(
   const useAutoLayout = isRotated90 ? true : config.autoLayout
 
   if (useAutoLayout) {
-    // Natural grid at full card size
+    // Calculate how many fixed-size cards fit in the available space.
+    // Card dimensions are NEVER modified — only rows/cols change.
     cols = Math.max(1, Math.floor((availW + gH) / (cardW + gH)))
     rows = Math.max(1, Math.floor((availH + gV) / (cardH + gV)))
-
-    if (!isRotated90) {
-      // Try fitting one extra column by scaling cards down proportionally.
-      // Accept if total cards increases and cards stay ≥ 90% of original size.
-      const tryCols = cols + 1
-      const tryCardW = (availW - (tryCols - 1) * gH) / tryCols
-      if (tryCardW > 0) {
-        const scale = tryCardW / cardW
-        const tryCardH = cardH * scale
-        const tryRows = Math.max(1, Math.floor((availH + gV) / (tryCardH + gV)))
-        if (tryCols * tryRows > cols * rows && scale >= 0.90) {
-          cols = tryCols
-          rows = tryRows
-          cardW = tryCardW
-          cardH = tryCardH
-        }
-      }
-    }
   }
 
-  // Clamp to fit
+  // Clamp to fit (for custom mode where user may set too many rows/cols)
   cols = Math.max(1, Math.min(cols, Math.floor((availW + gH) / (cardW + gH))))
   rows = Math.max(1, Math.min(rows, Math.floor((availH + gV) / (cardH + gV))))
 
