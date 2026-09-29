@@ -6,10 +6,13 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   DownloadIcon,
+  Edit3Icon,
   FileIcon,
   ImageIcon,
   Loader2Icon,
   PrinterIcon,
+  SaveIcon,
+  Trash2Icon,
   XIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -40,14 +43,26 @@ import {
   generatePDF,
   bulkExportImages,
   DEFAULT_PRINT_CONFIG,
+  DEFAULT_SIDE_ADJUSTMENT,
   migratePrintConfig,
   type PrintConfig,
   type PaperSize,
   type PaperOrientation,
   type PrintMode,
+  type LayoutMode,
+  type DuplexBackArrangement,
+  type SideAdjustment,
   type PageLayout,
   type PrintPage,
 } from '@/lib/print-layout'
+import { useAuth } from '@/components/providers/auth-provider'
+import {
+  createPrintPreset,
+  updatePrintPreset,
+  deletePrintPreset,
+  subscribePrintPresets,
+  type PrintPreset,
+} from '@/lib/firebase/preset-repository'
 
 interface Props {
   cards: RenderedCard[]
@@ -59,21 +74,102 @@ interface Props {
 const PREVIEW_HEIGHT = 500
 
 export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
+  const { user } = useAuth()
+  const workspaceId = user?.workspaceId ?? ''
+
   const [config, setConfig] = useState<PrintConfig>(DEFAULT_PRINT_CONFIG)
   const [currentPage, setCurrentPage] = useState(1)
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0, status: '' })
   const [cancelled, setCancelled] = useState(false)
 
+  // ── Presets ──────────────────────────────────────────────────────────
+  const [presets, setPresets] = useState<PrintPreset[]>([])
+  const [presetName, setPresetName] = useState('')
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameValue, setRenameValue] = useState('')
+
+  useEffect(() => {
+    if (!workspaceId) return
+    const unsub = subscribePrintPresets(workspaceId, setPresets)
+    return unsub
+  }, [workspaceId])
+
+  const handleSavePreset = async () => {
+    const name = presetName.trim()
+    if (!name || !workspaceId) return
+    try {
+      await createPrintPreset(workspaceId, name, config)
+      setPresetName('')
+      toast.success(`Preset "${name}" saved`)
+    } catch {
+      toast.error('Failed to save preset')
+    }
+  }
+
+  const handleApplyPreset = (preset: PrintPreset) => {
+    // Merge with defaults so any new fields added in future phases are populated
+    setConfig({ ...DEFAULT_PRINT_CONFIG, ...preset.config })
+    toast.success(`Applied "${preset.name}"`)
+  }
+
+  const handleUpdatePreset = async (preset: PrintPreset) => {
+    if (!workspaceId) return
+    try {
+      await updatePrintPreset(workspaceId, preset.id, { config })
+      toast.success(`Updated "${preset.name}" with current settings`)
+    } catch {
+      toast.error('Failed to update preset')
+    }
+  }
+
+  const handleRenamePreset = async (presetId: string) => {
+    const name = renameValue.trim()
+    if (!name || !workspaceId) return
+    try {
+      await updatePrintPreset(workspaceId, presetId, { name })
+      setRenamingId(null)
+      setRenameValue('')
+      toast.success('Preset renamed')
+    } catch {
+      toast.error('Failed to rename preset')
+    }
+  }
+
+  const handleDeletePreset = async (preset: PrintPreset) => {
+    if (!workspaceId) return
+    try {
+      await deletePrintPreset(workspaceId, preset.id)
+      toast.success(`Deleted "${preset.name}"`)
+    } catch {
+      toast.error('Failed to delete preset')
+    }
+  }
+
   const update = <K extends keyof PrintConfig>(key: K, value: PrintConfig[K]) =>
-    setConfig((prev) => ({ ...prev, [key]: value }))
+    setConfig((prev) => {
+      const next = { ...prev, [key]: value }
+      // Synchronize autoLayout when layoutMode changes
+      if (key === 'layoutMode') {
+        if (value === 'automatic') next.autoLayout = true
+        else if (value === 'custom') next.autoLayout = false
+        // 'rotated-90' uses its own auto-layout logic in the engine
+      }
+      return next
+    })
 
   const updateMargin = (side: keyof PrintConfig['margins'], value: number) =>
     setConfig((prev) => ({ ...prev, margins: { ...prev.margins, [side]: value } }))
 
+  const updateFrontAdj = (key: keyof SideAdjustment, value: number) =>
+    setConfig((prev) => ({ ...prev, frontAdjustment: { ...prev.frontAdjustment, [key]: value } }))
+
+  const updateBackAdj = (key: keyof SideAdjustment, value: number) =>
+    setConfig((prev) => ({ ...prev, backAdjustment: { ...prev.backAdjustment, [key]: value } }))
+
   // ── Layout calculation ────────────────────────────────────────────────
   const layout = useMemo(() => calculateLayout(config, cardOrientation), [config, cardOrientation])
-  const pages = useMemo(() => distributeCards(cards, layout, config.printMode, config.orientation), [cards, layout, config.printMode, config.orientation])
+  const pages = useMemo(() => distributeCards(cards, layout, config.printMode, config.orientation, config.duplexBack), [cards, layout, config.printMode, config.orientation, config.duplexBack])
   const totalPages = pages.length
   const currentPageData = pages[currentPage - 1] ?? null
 
@@ -168,12 +264,39 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                 <div className="flex rounded-md border">
                   {(['portrait', 'landscape'] as const).map((o) => (
                     <button key={o} type="button" onClick={() => update('orientation', o)}
-                      className={`flex-1 py-1 text-[10px] capitalize transition-colors ${config.orientation === o ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}>
+                      disabled={config.layoutMode === 'rotated-90'}
+                      className={`flex-1 py-1 text-[10px] capitalize transition-colors ${
+                        (config.layoutMode === 'rotated-90' ? 'portrait' : config.orientation) === o
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:bg-muted'
+                      } ${config.layoutMode === 'rotated-90' ? 'cursor-not-allowed opacity-50' : ''}`}>
                       {o}
                     </button>
                   ))}
                 </div>
+                {config.layoutMode === 'rotated-90' && (
+                  <p className="text-[9px] text-muted-foreground italic">Locked to Portrait in rotated mode</p>
+                )}
               </Row>
+            </Section>
+
+            <Separator />
+
+            {/* Card Layout Mode */}
+            <Section title="Card Layout">
+              <Select value={config.layoutMode} onValueChange={(v) => update('layoutMode', v as LayoutMode)}>
+                <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="automatic">Automatic</SelectItem>
+                  <SelectItem value="custom">Custom</SelectItem>
+                  <SelectItem value="rotated-90">Rotate Cards 90°</SelectItem>
+                </SelectContent>
+              </Select>
+              {config.layoutMode === 'rotated-90' && (
+                <p className="text-[9px] text-muted-foreground">
+                  Cards rotated 90° on portrait paper. Grid auto-calculated.
+                </p>
+              )}
             </Section>
 
             <Separator />
@@ -207,24 +330,28 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                     onChange={(e) => update('gutterV', Number(e.target.value))} />
                 </div>
               </div>
-              <div className="flex items-center gap-1.5">
-                <Checkbox id="autoLayout" checked={config.autoLayout}
-                  onCheckedChange={(c) => update('autoLayout', c === true)} />
-                <label htmlFor="autoLayout" className="text-[10px]">Auto Layout</label>
-              </div>
-              {!config.autoLayout && (
-                <div className="grid grid-cols-2 gap-1.5">
-                  <div className="flex flex-col gap-0.5">
-                    <label className="text-[9px] text-muted-foreground">Rows</label>
-                    <Input type="number" min={1} max={10} value={config.rows} className="h-6 text-xs"
-                      onChange={(e) => update('rows', Number(e.target.value))} />
+              {config.layoutMode !== 'rotated-90' && (
+                <>
+                  <div className="flex items-center gap-1.5">
+                    <Checkbox id="autoLayout" checked={config.autoLayout}
+                      onCheckedChange={(c) => update('autoLayout', c === true)} />
+                    <label htmlFor="autoLayout" className="text-[10px]">Auto Layout</label>
                   </div>
-                  <div className="flex flex-col gap-0.5">
-                    <label className="text-[9px] text-muted-foreground">Columns</label>
-                    <Input type="number" min={1} max={5} value={config.columns} className="h-6 text-xs"
-                      onChange={(e) => update('columns', Number(e.target.value))} />
-                  </div>
-                </div>
+                  {!config.autoLayout && (
+                    <div className="grid grid-cols-2 gap-1.5">
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[9px] text-muted-foreground">Rows</label>
+                        <Input type="number" min={1} max={10} value={config.rows} className="h-6 text-xs"
+                          onChange={(e) => update('rows', Number(e.target.value))} />
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[9px] text-muted-foreground">Columns</label>
+                        <Input type="number" min={1} max={5} value={config.columns} className="h-6 text-xs"
+                          onChange={(e) => update('columns', Number(e.target.value))} />
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </Section>
 
@@ -261,6 +388,71 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
               </Select>
             </Section>
 
+            {/* Back Side Arrangement — only in duplex mode */}
+            {config.printMode === 'duplex' && (
+              <>
+                <Separator />
+                <Section title="Back Side Arrangement">
+                  <Select value={config.duplexBack} onValueChange={(v) => update('duplexBack', v as DuplexBackArrangement)}>
+                    <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="normal">Normal</SelectItem>
+                      <SelectItem value="mirror-h">Mirror Horizontal</SelectItem>
+                      <SelectItem value="mirror-v">Mirror Vertical</SelectItem>
+                      <SelectItem value="rotate-180">Rotate 180°</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-[9px] text-muted-foreground">
+                    Match your printer’s duplex flip direction.
+                  </p>
+                </Section>
+              </>
+            )}
+
+            <Separator />
+
+            {/* Fine Adjustment — Front Side */}
+            <Section title="Front Side Adjustment">
+              <div className="grid grid-cols-3 gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">X (mm)</label>
+                  <Input type="number" step={0.1} value={config.frontAdjustment.offsetX} className="h-6 text-xs"
+                    onChange={(e) => updateFrontAdj('offsetX', Number(e.target.value))} />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">Y (mm)</label>
+                  <Input type="number" step={0.1} value={config.frontAdjustment.offsetY} className="h-6 text-xs"
+                    onChange={(e) => updateFrontAdj('offsetY', Number(e.target.value))} />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">Rot (°)</label>
+                  <Input type="number" step={0.1} value={config.frontAdjustment.rotation} className="h-6 text-xs"
+                    onChange={(e) => updateFrontAdj('rotation', Number(e.target.value))} />
+                </div>
+              </div>
+            </Section>
+
+            {/* Fine Adjustment — Back Side */}
+            <Section title="Back Side Adjustment">
+              <div className="grid grid-cols-3 gap-1.5">
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">X (mm)</label>
+                  <Input type="number" step={0.1} value={config.backAdjustment.offsetX} className="h-6 text-xs"
+                    onChange={(e) => updateBackAdj('offsetX', Number(e.target.value))} />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">Y (mm)</label>
+                  <Input type="number" step={0.1} value={config.backAdjustment.offsetY} className="h-6 text-xs"
+                    onChange={(e) => updateBackAdj('offsetY', Number(e.target.value))} />
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  <label className="text-[9px] text-muted-foreground">Rot (°)</label>
+                  <Input type="number" step={0.1} value={config.backAdjustment.rotation} className="h-6 text-xs"
+                    onChange={(e) => updateBackAdj('rotation', Number(e.target.value))} />
+                </div>
+              </div>
+            </Section>
+
             <Separator />
 
             {/* Info */}
@@ -273,7 +465,72 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
 
             <Separator />
 
-            {/* Export buttons */}
+            {/* Presets */}
+            <Section title="Presets">
+              {/* Save new */}
+              <div className="flex gap-1">
+                <Input
+                  placeholder="Preset name…"
+                  value={presetName}
+                  onChange={(e) => setPresetName(e.target.value)}
+                  className="h-6 text-xs flex-1"
+                  onKeyDown={(e) => e.key === 'Enter' && handleSavePreset()}
+                />
+                <Button variant="outline" size="icon-sm" onClick={handleSavePreset} disabled={!presetName.trim() || !workspaceId}
+                  title="Save current settings as preset">
+                  <SaveIcon className="size-3" />
+                </Button>
+              </div>
+              {/* List */}
+              {presets.length > 0 && (
+                <div className="flex flex-col gap-1 max-h-28 overflow-y-auto">
+                  {presets.map((p) => (
+                    <div key={p.id} className="flex items-center gap-1 rounded-md border px-1.5 py-1 text-[10px] group hover:bg-muted/50">
+                      {renamingId === p.id ? (
+                        <form className="flex gap-1 flex-1" onSubmit={(e) => { e.preventDefault(); handleRenamePreset(p.id) }}>
+                          <Input
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            className="h-5 text-[10px] flex-1"
+                            autoFocus
+                          />
+                          <Button variant="outline" size="icon-sm" type="submit" className="h-5 w-5">
+                            <SaveIcon className="size-2.5" />
+                          </Button>
+                          <Button variant="ghost" size="icon-sm" type="button" className="h-5 w-5" onClick={() => setRenamingId(null)}>
+                            <XIcon className="size-2.5" />
+                          </Button>
+                        </form>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => handleApplyPreset(p)}
+                            className="flex-1 text-left truncate font-medium hover:text-primary transition-colors"
+                            title={`Apply "${p.name}"`}
+                          >
+                            {p.name}
+                          </button>
+                          <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button type="button" onClick={() => handleUpdatePreset(p)} className="rounded p-0.5 hover:bg-muted" title="Overwrite with current settings">
+                              <SaveIcon className="size-2.5 text-muted-foreground" />
+                            </button>
+                            <button type="button" onClick={() => { setRenamingId(p.id); setRenameValue(p.name) }} className="rounded p-0.5 hover:bg-muted" title="Rename">
+                              <Edit3Icon className="size-2.5 text-muted-foreground" />
+                            </button>
+                            <button type="button" onClick={() => handleDeletePreset(p)} className="rounded p-0.5 hover:bg-destructive/10" title="Delete">
+                              <Trash2Icon className="size-2.5 text-destructive" />
+                            </button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Section>
+
+            <Separator />
             <div className="flex flex-col gap-1.5">
               <Button size="sm" onClick={handleExportPDF} disabled={exporting || cards.length === 0}>
                 {exporting ? <Spinner data-icon="inline-start" /> : <FileIcon data-icon="inline-start" />}
@@ -327,27 +584,42 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                   </div>
 
                   {/* Card slots */}
-                  {currentPageData.cards.map(({ slot, card }, idx) => (
-                    <div key={idx}>
-                      {/* Front card image */}
+                  {currentPageData.cards.map(({ slot, card }, idx) => {
+                    const adj = currentPageData.side === 'back' ? config.backAdjustment : config.frontAdjustment
+                    const adjX = adj.offsetX * previewScale
+                    const adjY = adj.offsetY * previewScale
+                    const adjRot = adj.rotation
+                    return (
+                    <div key={idx} style={{
+                      ...(adjRot !== 0 ? {
+                        transform: `rotate(${adjRot}deg)`,
+                        transformOrigin: `${layout.pageW * previewScale / 2}px ${layout.pageH * previewScale / 2}px`,
+                      } : {}),
+                    }}>
+                      {/* Card image */}
                       <img
                         src={currentPageData.side === 'back' ? card.backDataUrl : card.frontDataUrl}
                         alt={card.memberName}
                         className="absolute"
                         style={{
-                          left: slot.x * previewScale,
-                          top: slot.y * previewScale,
+                          left: slot.x * previewScale + adjX,
+                          top: slot.y * previewScale + adjY,
                           width: slot.w * previewScale,
                           height: slot.h * previewScale,
+                          ...(layout.rotateCards ? {
+                            transformOrigin: 'top left',
+                            transform: `translate(${slot.w * previewScale}px, 0px) rotate(90deg)`,
+                            width: slot.h * previewScale,
+                            height: slot.w * previewScale,
+                          } : {}),
                         }}
                         draggable={false}
                       />
 
-                      {/* Card border */}
                       {config.cardBorders && (
                         <div className="absolute border border-gray-300" style={{
-                          left: slot.x * previewScale,
-                          top: slot.y * previewScale,
+                          left: slot.x * previewScale + adjX,
+                          top: slot.y * previewScale + adjY,
                           width: slot.w * previewScale,
                           height: slot.h * previewScale,
                         }} />
@@ -356,14 +628,14 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                       {/* Crop marks (simplified preview) */}
                       {config.cropMarks && (
                         <>
-                          <div className="absolute bg-black" style={{ left: (slot.x - 4) * previewScale, top: slot.y * previewScale, width: 3 * previewScale, height: 0.15 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: slot.x * previewScale, top: (slot.y - 4) * previewScale, width: 0.15 * previewScale, height: 3 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w + 1) * previewScale, top: slot.y * previewScale, width: 3 * previewScale, height: 0.15 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w) * previewScale, top: (slot.y - 4) * previewScale, width: 0.15 * previewScale, height: 3 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: (slot.x - 4) * previewScale, top: (slot.y + slot.h) * previewScale, width: 3 * previewScale, height: 0.15 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: slot.x * previewScale, top: (slot.y + slot.h + 1) * previewScale, width: 0.15 * previewScale, height: 3 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w + 1) * previewScale, top: (slot.y + slot.h) * previewScale, width: 3 * previewScale, height: 0.15 * previewScale }} />
-                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w) * previewScale, top: (slot.y + slot.h + 1) * previewScale, width: 0.15 * previewScale, height: 3 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: (slot.x - 4) * previewScale + adjX, top: slot.y * previewScale + adjY, width: 3 * previewScale, height: 0.15 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: slot.x * previewScale + adjX, top: (slot.y - 4) * previewScale + adjY, width: 0.15 * previewScale, height: 3 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w + 1) * previewScale + adjX, top: slot.y * previewScale + adjY, width: 3 * previewScale, height: 0.15 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w) * previewScale + adjX, top: (slot.y - 4) * previewScale + adjY, width: 0.15 * previewScale, height: 3 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: (slot.x - 4) * previewScale + adjX, top: (slot.y + slot.h) * previewScale + adjY, width: 3 * previewScale, height: 0.15 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: slot.x * previewScale + adjX, top: (slot.y + slot.h + 1) * previewScale + adjY, width: 0.15 * previewScale, height: 3 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w + 1) * previewScale + adjX, top: (slot.y + slot.h) * previewScale + adjY, width: 3 * previewScale, height: 0.15 * previewScale }} />
+                          <div className="absolute bg-black" style={{ left: (slot.x + slot.w) * previewScale + adjX, top: (slot.y + slot.h + 1) * previewScale + adjY, width: 0.15 * previewScale, height: 3 * previewScale }} />
                         </>
                       )}
 
@@ -375,17 +647,23 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                             alt={`${card.memberName} back`}
                             className="absolute"
                             style={{
-                              left: (slot.x + slot.w + config.gutterH) * previewScale,
-                              top: slot.y * previewScale,
+                              left: (slot.x + slot.w + config.gutterH) * previewScale + config.backAdjustment.offsetX * previewScale,
+                              top: slot.y * previewScale + config.backAdjustment.offsetY * previewScale,
                               width: slot.w * previewScale,
                               height: slot.h * previewScale,
+                              ...(layout.rotateCards ? {
+                                transformOrigin: 'top left',
+                                transform: `translate(${slot.w * previewScale}px, 0px) rotate(90deg)`,
+                                width: slot.h * previewScale,
+                                height: slot.w * previewScale,
+                              } : {}),
                             }}
                             draggable={false}
                           />
                           {config.cardBorders && (
                             <div className="absolute border border-gray-300" style={{
-                              left: (slot.x + slot.w + config.gutterH) * previewScale,
-                              top: slot.y * previewScale,
+                              left: (slot.x + slot.w + config.gutterH) * previewScale + config.backAdjustment.offsetX * previewScale,
+                              top: slot.y * previewScale + config.backAdjustment.offsetY * previewScale,
                               width: slot.w * previewScale,
                               height: slot.h * previewScale,
                             }} />
@@ -393,7 +671,8 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
                         </>
                       )}
                     </div>
-                  ))}
+                    )
+                  })}
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">No cards to preview</div>

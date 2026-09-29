@@ -11,6 +11,23 @@ import type { RenderedCard } from './card-renderer'
 export type PaperSize = 'a4' | 'letter' | 'legal'
 export type PaperOrientation = 'portrait' | 'landscape'
 export type PrintMode = 'front-only' | 'back-only' | 'duplex' | 'side-by-side'
+export type LayoutMode = 'automatic' | 'custom' | 'rotated-90'
+export type DuplexBackArrangement = 'normal' | 'mirror-h' | 'mirror-v' | 'rotate-180'
+
+export interface SideAdjustment {
+  /** X offset in mm (positive = shift right) */
+  offsetX: number
+  /** Y offset in mm (positive = shift down) */
+  offsetY: number
+  /** Rotation in degrees around the center of the grid */
+  rotation: number
+}
+
+export const DEFAULT_SIDE_ADJUSTMENT: SideAdjustment = {
+  offsetX: 0,
+  offsetY: 0,
+  rotation: 0,
+}
 
 export interface PrintConfig {
   paperSize: PaperSize
@@ -28,6 +45,14 @@ export interface PrintConfig {
   cropMarks: boolean
   cardBorders: boolean
   printMode: PrintMode
+  /** Layout mode: automatic, custom grid, or rotated-90 cards */
+  layoutMode: LayoutMode
+  /** How the back side is arranged for duplex printing */
+  duplexBack: DuplexBackArrangement
+  /** Fine X/Y/rotation adjustment for front side */
+  frontAdjustment: SideAdjustment
+  /** Fine X/Y/rotation adjustment for back side */
+  backAdjustment: SideAdjustment
 }
 
 /** Migrate a config that may have the old single `gutter` field */
@@ -51,6 +76,10 @@ export const DEFAULT_PRINT_CONFIG: PrintConfig = {
   cropMarks: true,
   cardBorders: false,
   printMode: 'front-only',
+  layoutMode: 'automatic',
+  duplexBack: 'mirror-h',
+  frontAdjustment: { ...DEFAULT_SIDE_ADJUSTMENT },
+  backAdjustment: { ...DEFAULT_SIDE_ADJUSTMENT },
 }
 
 // ---------------------------------------------------------------------------
@@ -76,6 +105,8 @@ export interface CardSlot {
   y: number // mm from top
   w: number // card width mm
   h: number // card height mm
+  /** Rotation angle in degrees (0 = normal, 90 = rotated clockwise) */
+  rotation?: number
 }
 
 export interface PageLayout {
@@ -87,15 +118,27 @@ export interface PageLayout {
   cols: number
   slots: CardSlot[]
   cardsPerPage: number
+  /** Whether card images need to be rotated for this layout */
+  rotateCards: boolean
 }
 
 export function calculateLayout(config: PrintConfig, cardOrientation: 'horizontal' | 'vertical' = 'horizontal'): PageLayout {
   const paper = PAPER_DIMS[config.paperSize]
-  const pageW = config.orientation === 'landscape' ? paper.h : paper.w
-  const pageH = config.orientation === 'landscape' ? paper.w : paper.h
+  const isRotated90 = config.layoutMode === 'rotated-90'
 
-  let cardW = cardOrientation === 'vertical' ? CARD_H_MM : CARD_W_MM
-  let cardH = cardOrientation === 'vertical' ? CARD_W_MM : CARD_H_MM
+  // For rotated-90 mode, always use portrait paper regardless of the orientation setting
+  const effectiveOrientation = isRotated90 ? 'portrait' : config.orientation
+  const pageW = effectiveOrientation === 'landscape' ? paper.h : paper.w
+  const pageH = effectiveOrientation === 'landscape' ? paper.w : paper.h
+
+  // Determine base card dimensions from the card's design orientation
+  let baseCardW = cardOrientation === 'vertical' ? CARD_H_MM : CARD_W_MM
+  let baseCardH = cardOrientation === 'vertical' ? CARD_W_MM : CARD_H_MM
+
+  // For rotated-90 mode, swap the card dimensions for slot layout
+  // (the slot holds the rotated card, so W↔H are swapped)
+  let cardW = isRotated90 ? baseCardH : baseCardW
+  let cardH = isRotated90 ? baseCardW : baseCardH
 
   const availW = pageW - config.margins.left - config.margins.right
   const availH = pageH - config.margins.top - config.margins.bottom
@@ -106,24 +149,28 @@ export function calculateLayout(config: PrintConfig, cardOrientation: 'horizonta
   const gH = config.gutterH
   const gV = config.gutterV
 
-  if (config.autoLayout) {
+  const useAutoLayout = isRotated90 ? true : config.autoLayout
+
+  if (useAutoLayout) {
     // Natural grid at full card size
     cols = Math.max(1, Math.floor((availW + gH) / (cardW + gH)))
     rows = Math.max(1, Math.floor((availH + gV) / (cardH + gV)))
 
-    // Try fitting one extra column by scaling cards down proportionally.
-    // Accept if total cards increases and cards stay ≥ 90% of original size.
-    const tryCols = cols + 1
-    const tryCardW = (availW - (tryCols - 1) * gH) / tryCols
-    if (tryCardW > 0) {
-      const scale = tryCardW / cardW
-      const tryCardH = cardH * scale
-      const tryRows = Math.max(1, Math.floor((availH + gV) / (tryCardH + gV)))
-      if (tryCols * tryRows > cols * rows && scale >= 0.90) {
-        cols = tryCols
-        rows = tryRows
-        cardW = tryCardW
-        cardH = tryCardH
+    if (!isRotated90) {
+      // Try fitting one extra column by scaling cards down proportionally.
+      // Accept if total cards increases and cards stay ≥ 90% of original size.
+      const tryCols = cols + 1
+      const tryCardW = (availW - (tryCols - 1) * gH) / tryCols
+      if (tryCardW > 0) {
+        const scale = tryCardW / cardW
+        const tryCardH = cardH * scale
+        const tryRows = Math.max(1, Math.floor((availH + gV) / (tryCardH + gV)))
+        if (tryCols * tryRows > cols * rows && scale >= 0.90) {
+          cols = tryCols
+          rows = tryRows
+          cardW = tryCardW
+          cardH = tryCardH
+        }
       }
     }
   }
@@ -147,11 +194,12 @@ export function calculateLayout(config: PrintConfig, cardOrientation: 'horizonta
         y: offsetY + r * (cardH + gV),
         w: cardW,
         h: cardH,
+        rotation: isRotated90 ? 90 : 0,
       })
     }
   }
 
-  return { pageW, pageH, cardW, cardH, rows, cols, slots, cardsPerPage: rows * cols }
+  return { pageW, pageH, cardW, cardH, rows, cols, slots, cardsPerPage: rows * cols, rotateCards: isRotated90 }
 }
 
 // ---------------------------------------------------------------------------
@@ -164,11 +212,52 @@ export interface PrintPage {
   cards: { slot: CardSlot; card: RenderedCard }[]
 }
 
+/**
+ * Compute the back-side slot mapping for duplex based on the arrangement mode.
+ * Each arrangement transforms the slot index so that cards on the back page
+ * land in the physically correct position after the paper is flipped.
+ */
+function computeBackSlots(
+  slots: CardSlot[],
+  rows: number,
+  cols: number,
+  arrangement: DuplexBackArrangement,
+): CardSlot[] {
+  return slots.map((_slot, idx) => {
+    const row = Math.floor(idx / cols)
+    const col = idx % cols
+    switch (arrangement) {
+      case 'normal':
+        // Same order as front — no transformation
+        return slots[idx]
+      case 'mirror-h': {
+        // Columns reversed, rows same
+        const mirroredCol = cols - 1 - col
+        return slots[row * cols + mirroredCol]
+      }
+      case 'mirror-v': {
+        // Rows reversed, columns same
+        const mirroredRow = rows - 1 - row
+        return slots[mirroredRow * cols + col]
+      }
+      case 'rotate-180': {
+        // Both rows and columns reversed (180° rotation of grid)
+        const mirroredRow = rows - 1 - row
+        const mirroredCol = cols - 1 - col
+        return slots[mirroredRow * cols + mirroredCol]
+      }
+      default:
+        return slots[idx]
+    }
+  })
+}
+
 export function distributeCards(
   cards: RenderedCard[],
   layout: PageLayout,
   printMode: PrintMode,
   orientation: PaperOrientation = 'portrait',
+  duplexBack: DuplexBackArrangement = 'mirror-h',
 ): PrintPage[] {
   const pages: PrintPage[] = []
   const { cardsPerPage, slots } = layout
@@ -185,26 +274,13 @@ export function distributeCards(
     }
   } else if (printMode === 'duplex') {
     // Front pages followed by matching back pages
+    const backSlots = computeBackSlots(slots, layout.rows, layout.cols, duplexBack)
     for (let i = 0; i < cards.length; i += cardsPerPage) {
       const chunk = cards.slice(i, i + cardsPerPage)
       pages.push({
         pageNumber: pages.length + 1,
         side: 'front',
         cards: chunk.map((card, idx) => ({ slot: slots[idx], card })),
-      })
-      // Back page — reverse column order for proper duplex alignment
-      const backSlots = [...slots].map((slot, idx) => {
-        const row = Math.floor(idx / layout.cols)
-        const col = idx % layout.cols
-        if (orientation === 'landscape') {
-          // Long-edge flip: rows reversed, columns same
-          const mirroredRow = layout.rows - 1 - row
-          return slots[mirroredRow * layout.cols + col]
-        } else {
-          // Short-edge flip (portrait): columns reversed, rows same
-          const mirroredCol = layout.cols - 1 - col
-          return slots[row * layout.cols + mirroredCol]
-        }
       })
       pages.push({
         pageNumber: pages.length + 1,
@@ -232,6 +308,38 @@ export function distributeCards(
 }
 
 // ---------------------------------------------------------------------------
+// Rotate image data 90° clockwise on a canvas, returning a data URL.
+// Used for the rotated-90 layout mode. Does NOT modify the original card.
+// ---------------------------------------------------------------------------
+
+const rotatedImageCache = new Map<string, string>()
+
+function rotateImageData90(dataUrl: string): Promise<string> {
+  const cached = rotatedImageCache.get(dataUrl)
+  if (cached) return Promise.resolve(cached)
+
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      // Swap dimensions for 90° rotation
+      canvas.width = img.height
+      canvas.height = img.width
+      const ctx = canvas.getContext('2d')!
+      // Translate to center, rotate 90° clockwise, draw offset
+      ctx.translate(canvas.width / 2, canvas.height / 2)
+      ctx.rotate(Math.PI / 2)
+      ctx.drawImage(img, -img.width / 2, -img.height / 2)
+      const result = canvas.toDataURL('image/png')
+      rotatedImageCache.set(dataUrl, result)
+      resolve(result)
+    }
+    img.onerror = reject
+    img.src = dataUrl
+  })
+}
+
+// ---------------------------------------------------------------------------
 // PDF Generation
 // ---------------------------------------------------------------------------
 
@@ -244,10 +352,13 @@ export async function generatePDF(
   const { default: jsPDF } = await import('jspdf')
 
   const layout = calculateLayout(config, cardOrientation)
-  const pages = distributeCards(cards, layout, config.printMode, config.orientation)
+  const pages = distributeCards(cards, layout, config.printMode, config.orientation, config.duplexBack)
+
+  // For rotated-90 mode, always use portrait regardless of config.orientation
+  const effectivePdfOrientation = layout.rotateCards ? 'portrait' : config.orientation
 
   const pdf = new jsPDF({
-    orientation: config.orientation === 'landscape' ? 'landscape' : 'portrait',
+    orientation: effectivePdfOrientation === 'landscape' ? 'landscape' : 'portrait',
     unit: 'mm',
     format: config.paperSize === 'a4' ? 'a4' : config.paperSize === 'letter' ? 'letter' : 'legal',
   })
@@ -256,19 +367,64 @@ export async function generatePDF(
   const CROP_LEN = 3 // mm
   const CROP_OFFSET = 1 // mm from card edge
 
+  // Pre-rotate images if needed (only done once per unique data URL)
+  if (layout.rotateCards) {
+    onProgress?.(0, totalPages, 'Preparing rotated card images…')
+    const uniqueUrls = new Set<string>()
+    for (const card of cards) {
+      uniqueUrls.add(card.frontDataUrl)
+      uniqueUrls.add(card.backDataUrl)
+    }
+    await Promise.all(Array.from(uniqueUrls).map((url) => rotateImageData90(url)))
+  }
+
   for (let pi = 0; pi < pages.length; pi++) {
     const page = pages[pi]
     onProgress?.(pi + 1, totalPages, `Rendering page ${pi + 1} of ${totalPages}…`)
 
     if (pi > 0) pdf.addPage()
 
+    // Apply side adjustment (offset + rotation) for this page
+    const adj = page.side === 'back' ? config.backAdjustment : config.frontAdjustment
+    const hasAdj = adj.offsetX !== 0 || adj.offsetY !== 0 || adj.rotation !== 0
+    if (hasAdj) {
+      // Save the current graphics state
+      ;(pdf as any).saveGraphicsState()
+      // Apply translation
+      if (adj.offsetX !== 0 || adj.offsetY !== 0) {
+        // jsPDF doesn't have a direct translate; we offset all coordinates below
+      }
+      // Apply rotation around page center
+      if (adj.rotation !== 0) {
+        const cx = layout.pageW / 2
+        const cy = layout.pageH / 2
+        // Use internal matrix transform for rotation around center
+        const rad = (adj.rotation * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        // Translate to center, rotate, translate back
+        ;(pdf as any).setCurrentTransformationMatrix(
+          (pdf as any).Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos)
+        )
+      }
+    }
+
     // Draw each card on this page
     for (const { slot, card } of page.cards) {
-      const imgData = page.side === 'back' ? card.backDataUrl : card.frontDataUrl
+      let imgData = page.side === 'back' ? card.backDataUrl : card.frontDataUrl
+
+      // For rotated-90 mode, use the pre-rotated image
+      if (layout.rotateCards) {
+        imgData = rotatedImageCache.get(imgData) ?? imgData
+      }
+
+      // Apply X/Y offset from side adjustment
+      const drawX = slot.x + adj.offsetX
+      const drawY = slot.y + adj.offsetY
 
       // Draw card image
       try {
-        pdf.addImage(imgData, 'PNG', slot.x, slot.y, slot.w, slot.h)
+        pdf.addImage(imgData, 'PNG', drawX, drawY, slot.w, slot.h)
       } catch {
         // Skip if image fails
       }
@@ -277,7 +433,7 @@ export async function generatePDF(
       if (config.cardBorders) {
         pdf.setDrawColor(200, 200, 200)
         pdf.setLineWidth(0.2)
-        pdf.rect(slot.x, slot.y, slot.w, slot.h)
+        pdf.rect(drawX, drawY, slot.w, slot.h)
       }
 
       // Crop marks
@@ -286,47 +442,58 @@ export async function generatePDF(
         pdf.setLineWidth(0.15)
 
         // Top-left
-        pdf.line(slot.x - CROP_OFFSET - CROP_LEN, slot.y, slot.x - CROP_OFFSET, slot.y)
-        pdf.line(slot.x, slot.y - CROP_OFFSET - CROP_LEN, slot.x, slot.y - CROP_OFFSET)
+        pdf.line(drawX - CROP_OFFSET - CROP_LEN, drawY, drawX - CROP_OFFSET, drawY)
+        pdf.line(drawX, drawY - CROP_OFFSET - CROP_LEN, drawX, drawY - CROP_OFFSET)
 
         // Top-right
-        pdf.line(slot.x + slot.w + CROP_OFFSET, slot.y, slot.x + slot.w + CROP_OFFSET + CROP_LEN, slot.y)
-        pdf.line(slot.x + slot.w, slot.y - CROP_OFFSET - CROP_LEN, slot.x + slot.w, slot.y - CROP_OFFSET)
+        pdf.line(drawX + slot.w + CROP_OFFSET, drawY, drawX + slot.w + CROP_OFFSET + CROP_LEN, drawY)
+        pdf.line(drawX + slot.w, drawY - CROP_OFFSET - CROP_LEN, drawX + slot.w, drawY - CROP_OFFSET)
 
         // Bottom-left
-        pdf.line(slot.x - CROP_OFFSET - CROP_LEN, slot.y + slot.h, slot.x - CROP_OFFSET, slot.y + slot.h)
-        pdf.line(slot.x, slot.y + slot.h + CROP_OFFSET, slot.x, slot.y + slot.h + CROP_OFFSET + CROP_LEN)
+        pdf.line(drawX - CROP_OFFSET - CROP_LEN, drawY + slot.h, drawX - CROP_OFFSET, drawY + slot.h)
+        pdf.line(drawX, drawY + slot.h + CROP_OFFSET, drawX, drawY + slot.h + CROP_OFFSET + CROP_LEN)
 
         // Bottom-right
-        pdf.line(slot.x + slot.w + CROP_OFFSET, slot.y + slot.h, slot.x + slot.w + CROP_OFFSET + CROP_LEN, slot.y + slot.h)
-        pdf.line(slot.x + slot.w, slot.y + slot.h + CROP_OFFSET, slot.x + slot.w, slot.y + slot.h + CROP_OFFSET + CROP_LEN)
+        pdf.line(drawX + slot.w + CROP_OFFSET, drawY + slot.h, drawX + slot.w + CROP_OFFSET + CROP_LEN, drawY + slot.h)
+        pdf.line(drawX + slot.w, drawY + slot.h + CROP_OFFSET, drawX + slot.w, drawY + slot.h + CROP_OFFSET + CROP_LEN)
       }
     }
 
     // Side-by-side mode: draw back cards next to fronts
     if (config.printMode === 'side-by-side') {
       for (const { slot, card } of page.cards) {
-        const backX = slot.x + slot.w + config.gutterH
+        const backAdj = config.backAdjustment
+        const backX = slot.x + slot.w + config.gutterH + backAdj.offsetX
+        const backY = slot.y + backAdj.offsetY
         if (backX + slot.w <= layout.pageW - config.margins.right) {
+          let backImg = card.backDataUrl
+          if (layout.rotateCards) {
+            backImg = rotatedImageCache.get(backImg) ?? backImg
+          }
           try {
-            pdf.addImage(card.backDataUrl, 'PNG', backX, slot.y, slot.w, slot.h)
+            pdf.addImage(backImg, 'PNG', backX, backY, slot.w, slot.h)
           } catch { /* skip */ }
 
           if (config.cardBorders) {
             pdf.setDrawColor(200, 200, 200)
             pdf.setLineWidth(0.2)
-            pdf.rect(backX, slot.y, slot.w, slot.h)
+            pdf.rect(backX, backY, slot.w, slot.h)
           }
           if (config.cropMarks) {
             pdf.setDrawColor(0, 0, 0)
             pdf.setLineWidth(0.15)
-            pdf.line(backX + slot.w + CROP_OFFSET, slot.y, backX + slot.w + CROP_OFFSET + CROP_LEN, slot.y)
-            pdf.line(backX + slot.w, slot.y - CROP_OFFSET - CROP_LEN, backX + slot.w, slot.y - CROP_OFFSET)
-            pdf.line(backX + slot.w + CROP_OFFSET, slot.y + slot.h, backX + slot.w + CROP_OFFSET + CROP_LEN, slot.y + slot.h)
-            pdf.line(backX + slot.w, slot.y + slot.h + CROP_OFFSET, backX + slot.w, slot.y + slot.h + CROP_OFFSET + CROP_LEN)
+            pdf.line(backX + slot.w + CROP_OFFSET, backY, backX + slot.w + CROP_OFFSET + CROP_LEN, backY)
+            pdf.line(backX + slot.w, backY - CROP_OFFSET - CROP_LEN, backX + slot.w, backY - CROP_OFFSET)
+            pdf.line(backX + slot.w + CROP_OFFSET, backY + slot.h, backX + slot.w + CROP_OFFSET + CROP_LEN, backY + slot.h)
+            pdf.line(backX + slot.w, backY + slot.h + CROP_OFFSET, backX + slot.w, backY + slot.h + CROP_OFFSET + CROP_LEN)
           }
         }
       }
+    }
+
+    // Restore graphics state if we applied adjustments
+    if (hasAdj && adj.rotation !== 0) {
+      ;(pdf as any).restoreGraphicsState()
     }
 
     // Yield to main thread

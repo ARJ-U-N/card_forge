@@ -282,5 +282,6 @@ export const COLLECTIONS = {
   designs: 'designs',
   assets: 'assets',
   parentShares: 'parentShares',
+  printPresets: 'printPresets',
 } as const
 
