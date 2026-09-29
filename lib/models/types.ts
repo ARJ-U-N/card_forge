@@ -173,6 +173,10 @@ export interface CardConfiguration {
   textBoundaries: boolean
   /** Whether the card has a back side. Defaults to true for backward compatibility. */
   isDoubleSide: boolean
+  /** Physical card width in millimetres. Defaults to CR-80 (85.6mm). */
+  cardWidthMm: number
+  /** Physical card height in millimetres. Defaults to CR-80 (54mm). */
+  cardHeightMm: number
 }
 
 export const DEFAULT_CARD_CONFIG: CardConfiguration = {
@@ -185,6 +189,8 @@ export const DEFAULT_CARD_CONFIG: CardConfiguration = {
   safeZoneMargin: 5,
   textBoundaries: true,
   isDoubleSide: true,
+  cardWidthMm: 85.6,
+  cardHeightMm: 54,
 }
 
 /** A positioned element on the card canvas. */

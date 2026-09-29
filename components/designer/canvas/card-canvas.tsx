@@ -8,9 +8,22 @@ import type {
   CardDocument,
 } from '@/lib/models/types'
 
-// CR-80 card (3.375" × 2.125" at 96 DPI)
-const CARD_W = 324
-const CARD_H = 204
+// CR-80 defaults (pixels): 324 × 204
+const DEFAULT_CARD_W = 324
+const DEFAULT_CARD_H = 204
+
+// Consistent pixels-per-mm scale factor (based on CR-80: 324px / 85.6mm)
+const PX_PER_MM = DEFAULT_CARD_W / 85.6
+
+/** Derive canvas pixel dimensions from card config (mm → px) */
+function cardPixelSize(config: CardConfiguration): { w: number; h: number } {
+  const wmm = config.cardWidthMm ?? 85.6
+  const hmm = config.cardHeightMm ?? 54
+  return {
+    w: Math.round(wmm * PX_PER_MM),
+    h: Math.round(hmm * PX_PER_MM),
+  }
+}
 
 // ---------------------------------------------------------------------------
 // CSS clip-path helpers for shape support
@@ -92,9 +105,10 @@ export function CardCanvas({
   const containerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
 
+  const { w: baseW, h: baseH } = cardPixelSize(config)
   const isVertical = config.orientation === 'vertical'
-  const cardW = isVertical ? CARD_H : CARD_W
-  const cardH = isVertical ? CARD_W : CARD_H
+  const cardW = isVertical ? baseH : baseW
+  const cardH = isVertical ? baseW : baseH
   const scale = zoom / 100
   const safeZone = config.safeZoneMargin * 3
 

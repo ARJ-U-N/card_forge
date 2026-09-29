@@ -67,13 +67,17 @@ import {
 interface Props {
   cards: RenderedCard[]
   cardOrientation: 'horizontal' | 'vertical'
+  /** Physical card width in mm (from CardConfiguration). Defaults to CR-80. */
+  cardWidthMm?: number
+  /** Physical card height in mm (from CardConfiguration). Defaults to CR-80. */
+  cardHeightMm?: number
   trigger: React.ReactElement
 }
 
 // Page dimensions for preview scaling
 const PREVIEW_HEIGHT = 500
 
-export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
+export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHeightMm, trigger }: Props) {
   const { user } = useAuth()
   const workspaceId = user?.workspaceId ?? ''
 
@@ -168,7 +172,11 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
     setConfig((prev) => ({ ...prev, backAdjustment: { ...prev.backAdjustment, [key]: value } }))
 
   // ── Layout calculation ────────────────────────────────────────────────
-  const layout = useMemo(() => calculateLayout(config, cardOrientation), [config, cardOrientation])
+  const customCardMm = useMemo(() => {
+    if (cardWidthMm && cardHeightMm) return { w: cardWidthMm, h: cardHeightMm }
+    return undefined
+  }, [cardWidthMm, cardHeightMm])
+  const layout = useMemo(() => calculateLayout(config, cardOrientation, customCardMm), [config, cardOrientation, customCardMm])
   const pages = useMemo(() => distributeCards(cards, layout, config.printMode, config.orientation, config.duplexBack), [cards, layout, config.printMode, config.orientation, config.duplexBack])
   const totalPages = pages.length
   const currentPageData = pages[currentPage - 1] ?? null
@@ -189,7 +197,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, trigger }: Props) {
     try {
       const blob = await generatePDF(cards, config, cardOrientation, (c, t, s) => {
         setExportProgress({ current: c, total: t, status: s })
-      })
+      }, customCardMm)
 
       if (!cancelled) {
         const url = URL.createObjectURL(blob)

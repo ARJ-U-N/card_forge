@@ -92,7 +92,7 @@ const PAPER_DIMS: Record<PaperSize, { w: number; h: number }> = {
   legal: { w: 215.9, h: 355.6 },
 }
 
-// CR-80 card (mm): 85.6 × 53.98
+// CR-80 card (mm): 85.6 × 53.98 — used as defaults
 const CARD_W_MM = 85.6
 const CARD_H_MM = 54
 
@@ -122,7 +122,12 @@ export interface PageLayout {
   rotateCards: boolean
 }
 
-export function calculateLayout(config: PrintConfig, cardOrientation: 'horizontal' | 'vertical' = 'horizontal'): PageLayout {
+export function calculateLayout(
+  config: PrintConfig,
+  cardOrientation: 'horizontal' | 'vertical' = 'horizontal',
+  /** Custom card dimensions in mm. Falls back to CR-80. */
+  customCardMm?: { w: number; h: number },
+): PageLayout {
   const paper = PAPER_DIMS[config.paperSize]
   const isRotated90 = config.layoutMode === 'rotated-90'
 
@@ -131,9 +136,13 @@ export function calculateLayout(config: PrintConfig, cardOrientation: 'horizonta
   const pageW = effectiveOrientation === 'landscape' ? paper.h : paper.w
   const pageH = effectiveOrientation === 'landscape' ? paper.w : paper.h
 
+  // Use custom card dimensions or fall back to CR-80
+  const rawW = customCardMm?.w ?? CARD_W_MM
+  const rawH = customCardMm?.h ?? CARD_H_MM
+
   // Determine base card dimensions from the card's design orientation
-  let baseCardW = cardOrientation === 'vertical' ? CARD_H_MM : CARD_W_MM
-  let baseCardH = cardOrientation === 'vertical' ? CARD_W_MM : CARD_H_MM
+  let baseCardW = cardOrientation === 'vertical' ? rawH : rawW
+  let baseCardH = cardOrientation === 'vertical' ? rawW : rawH
 
   // For rotated-90 mode, swap the card dimensions for slot layout
   // (the slot holds the rotated card, so W↔H are swapped)
@@ -348,10 +357,11 @@ export async function generatePDF(
   config: PrintConfig,
   cardOrientation: 'horizontal' | 'vertical',
   onProgress?: (current: number, total: number, status: string) => void,
+  customCardMm?: { w: number; h: number },
 ): Promise<Blob> {
   const { default: jsPDF } = await import('jspdf')
 
-  const layout = calculateLayout(config, cardOrientation)
+  const layout = calculateLayout(config, cardOrientation, customCardMm)
   const pages = distributeCards(cards, layout, config.printMode, config.orientation, config.duplexBack)
 
   // For rotated-90 mode, always use portrait regardless of config.orientation

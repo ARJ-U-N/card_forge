@@ -584,10 +584,19 @@ export function RightPanel({
 
                 {/* ── Actions ─────────────────────────────────────── */}
                 <div className="flex gap-1.5">
+                  <Button
+                    variant={el.locked ? 'default' : 'outline'}
+                    size="xs"
+                    className="flex-1"
+                    onClick={() => onUpdateElement(el.id, { locked: !el.locked })}
+                  >
+                    {el.locked ? <LockIcon className="size-3" /> : <UnlockIcon className="size-3" />}
+                    {el.locked ? 'Locked' : 'Lock'}
+                  </Button>
                   <Button variant="outline" size="xs" className="flex-1" onClick={() => onDuplicateElement(el.id)}>
                     <CopyIcon className="size-3" /> Duplicate
                   </Button>
-                  <Button variant="destructive" size="xs" className="flex-1" onClick={() => onDeleteElement(el.id)}>
+                  <Button variant="destructive" size="xs" className="flex-1" onClick={() => onDeleteElement(el.id)} disabled={el.locked}>
                     <Trash2Icon className="size-3" /> Delete
                   </Button>
                 </div>

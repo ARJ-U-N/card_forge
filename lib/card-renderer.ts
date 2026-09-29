@@ -61,9 +61,22 @@ function shapeSides(shape: string): number | null {
   return map[shape] ?? null
 }
 
-const CARD_W = 324
-const CARD_H = 204
+// CR-80 defaults (pixels): 324 × 204
+const DEFAULT_CARD_W = 324
+const DEFAULT_CARD_H = 204
 
+// Consistent pixels-per-mm scale factor (based on CR-80: 324px / 85.6mm)
+const PX_PER_MM = DEFAULT_CARD_W / 85.6
+
+/** Derive canvas pixel dimensions from card config (mm → px) */
+function cardPixelSize(config: CardConfiguration): { w: number; h: number } {
+  const wmm = config.cardWidthMm ?? 85.6
+  const hmm = config.cardHeightMm ?? 54
+  return {
+    w: Math.round(wmm * PX_PER_MM),
+    h: Math.round(hmm * PX_PER_MM),
+  }
+}
 function resolveDynamicText(member: Member, fieldName: string): string {
   // Prefer customFields (parent form stores all values here).
   // Fall back to built-in Member fields for normal member rendering.
@@ -152,9 +165,10 @@ async function renderSide(
   config: CardConfiguration,
   member: Member,
 ): Promise<HTMLCanvasElement> {
+  const { w: baseW, h: baseH } = cardPixelSize(config)
   const isVertical = config.orientation === 'vertical'
-  const w = isVertical ? CARD_H : CARD_W
-  const h = isVertical ? CARD_W : CARD_H
+  const w = isVertical ? baseH : baseW
+  const h = isVertical ? baseW : baseH
 
   const canvas = document.createElement('canvas')
   canvas.width = w * 2 // 2x for quality

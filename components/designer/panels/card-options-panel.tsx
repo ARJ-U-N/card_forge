@@ -56,6 +56,37 @@ export function CardOptionsPanel({ config, onConfigChange }: Props) {
         </div>
       </div>
 
+      {/* Card Size */}
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium">Card Size (mm)</label>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-muted-foreground">Width</span>
+            <Input
+              type="number"
+              min={20}
+              max={300}
+              step={0.1}
+              value={config.cardWidthMm ?? 85.6}
+              onChange={(e) => update('cardWidthMm', Number(e.target.value))}
+              className="h-7 text-xs"
+            />
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-muted-foreground">Height</span>
+            <Input
+              type="number"
+              min={20}
+              max={300}
+              step={0.1}
+              value={config.cardHeightMm ?? 54}
+              onChange={(e) => update('cardHeightMm', Number(e.target.value))}
+              className="h-7 text-xs"
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Material */}
       <div className="flex flex-col gap-1.5">
         <label className="text-xs font-medium">Material</label>

@@ -200,6 +200,9 @@ export function CardDesigner({ designId }: Props) {
         // Don't delete if an input is focused
         const tag = (e.target as HTMLElement).tagName
         if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        // Don't delete locked elements
+        const el = activeDoc.elements.find((el) => el.id === selectedElementId)
+        if (el?.locked) return
         handleDeleteElement(selectedElementId)
       }
       if (e.key === 'Escape') setSelectedElementId(null)
@@ -210,7 +213,7 @@ export function CardDesigner({ designId }: Props) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedElementId, handleDeleteElement, handleDuplicateElement])
+  }, [selectedElementId, handleDeleteElement, handleDuplicateElement, activeDoc])
 
   // ── Loading / Not found ───────────────────────────────────────────────
   if (loading) {

@@ -360,6 +360,8 @@ export function BulkGeneratorView() {
             <PrintLayoutDialog
               cards={cards}
               cardOrientation={selectedDesign.cardConfiguration.orientation}
+              cardWidthMm={selectedDesign.cardConfiguration.cardWidthMm}
+              cardHeightMm={selectedDesign.cardConfiguration.cardHeightMm}
               trigger={
                 <Button variant="outline" size="sm">
                   <PrinterIcon data-icon="inline-start" />
