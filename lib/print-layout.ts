@@ -8,7 +8,7 @@ import type { RenderedCard } from './card-renderer'
 // Configuration types
 // ---------------------------------------------------------------------------
 
-export type PaperSize = 'a4' | 'letter' | 'legal'
+export type PaperSize = 'a3' | 'a4' | 'letter' | 'legal'
 export type PaperOrientation = 'portrait' | 'landscape'
 export type PrintMode = 'front-only' | 'back-only' | 'duplex' | 'side-by-side'
 export type LayoutMode = 'automatic' | 'custom' | 'rotated-90'
@@ -87,6 +87,7 @@ export const DEFAULT_PRINT_CONFIG: PrintConfig = {
 // ---------------------------------------------------------------------------
 
 const PAPER_DIMS: Record<PaperSize, { w: number; h: number }> = {
+  a3: { w: 297, h: 420 },
   a4: { w: 210, h: 297 },
   letter: { w: 215.9, h: 279.4 },
   legal: { w: 215.9, h: 355.6 },

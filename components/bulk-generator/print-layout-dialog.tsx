@@ -262,6 +262,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
                 <Select value={config.paperSize} onValueChange={(v) => update('paperSize', v as PaperSize)}>
                   <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="a3">A3</SelectItem>
                     <SelectItem value="a4">A4</SelectItem>
                     <SelectItem value="letter">Letter</SelectItem>
                     <SelectItem value="legal">Legal</SelectItem>
