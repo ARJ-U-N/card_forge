@@ -23,6 +23,7 @@ import type {
   CardConfiguration,
   CardDocument,
   CanvasElement,
+  ColumnRoles,
   Design,
   Folder,
 } from '@/lib/models/types'
@@ -327,6 +328,7 @@ export function CardDesigner({ designId }: Props) {
           onAddElement={handleAddElement}
           tableColumns={linkedFolder?.tableColumns}
           tableColumnTypes={linkedFolder?.tableColumnTypes}
+          tableColumnRoles={linkedFolder?.tableColumnRoles}
         />
 
         <div className="flex flex-1 items-center justify-center bg-muted/30 overflow-auto p-6">
@@ -348,6 +350,8 @@ export function CardDesigner({ designId }: Props) {
           onDeleteElement={handleDeleteElement}
           onDuplicateElement={handleDuplicateElement}
           onReorderElement={handleReorderElement}
+          tableColumns={linkedFolder?.tableColumns}
+          tableColumnRoles={linkedFolder?.tableColumnRoles}
         />
       </div>
     </div>

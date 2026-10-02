@@ -51,6 +51,7 @@ import {
   type RenderedCard,
 } from '@/lib/card-renderer'
 import type { Design, Folder, Member } from '@/lib/models/types'
+import { getTableNameColumn, getMemberDisplayName } from '@/lib/models/types'
 import { cn } from '@/lib/utils'
 import { PrintLayoutDialog } from './print-layout-dialog'
 
@@ -118,6 +119,16 @@ export function BulkGeneratorView() {
   // Reset page when search/folder changes
   useEffect(() => setCurrentPage(1), [search, selectedFolderId, rowsPerPage])
 
+  // Derive the Table Name column from the selected folder's roles
+  const selectedFolder = useMemo(
+    () => (selectedFolderId !== '__all__' ? folders.find((f) => f.id === selectedFolderId) : undefined),
+    [folders, selectedFolderId],
+  )
+  const tableNameCol = useMemo(
+    () => getTableNameColumn(selectedFolder?.tableColumnRoles),
+    [selectedFolder?.tableColumnRoles],
+  )
+
   // ── Filtering & pagination ────────────────────────────────────────────
   const filtered = useMemo(() => {
     if (!search.trim()) return members
@@ -127,9 +138,13 @@ export function BulkGeneratorView() {
         m.firstName.toLowerCase().includes(q) ||
         m.lastName.toLowerCase().includes(q) ||
         m.employeeId.toLowerCase().includes(q) ||
-        m.department.toLowerCase().includes(q),
+        m.department.toLowerCase().includes(q) ||
+        // Search the Table Name column value (from customFields) if configured
+        (tableNameCol && (m.customFields?.[tableNameCol] ?? '').toLowerCase().includes(q)) ||
+        // Also search all customFields values so dynamic table data is findable
+        Object.values(m.customFields ?? {}).some((v) => v.toLowerCase().includes(q)),
     )
-  }, [members, search])
+  }, [members, search, tableNameCol])
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / rowsPerPage))
   const paginated = filtered.slice(
@@ -362,6 +377,8 @@ export function BulkGeneratorView() {
               cardOrientation={selectedDesign.cardConfiguration.orientation}
               cardWidthMm={selectedDesign.cardConfiguration.cardWidthMm}
               cardHeightMm={selectedDesign.cardConfiguration.cardHeightMm}
+              design={selectedDesign}
+              members={filtered}
               trigger={
                 <Button variant="outline" size="sm">
                   <PrinterIcon data-icon="inline-start" />
@@ -548,12 +565,12 @@ export function BulkGeneratorView() {
                     {member.profileImage ? (
                       <img src={member.profileImage} alt="" className="size-8 rounded-full object-cover" />
                     ) : (
-                      <span>{(member.firstName[0] ?? '') + (member.lastName[0] ?? '')}</span>
+                      <span>{getMemberDisplayName(member, tableNameCol).slice(0, 2).toUpperCase()}</span>
                     )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="truncate text-sm font-medium">
-                      {member.firstName} {member.lastName}
+                      {getMemberDisplayName(member, tableNameCol) || 'Unnamed'}
                     </p>
                     <p className="truncate text-[10px] text-muted-foreground">
                       {[member.title, member.department, member.employeeId].filter(Boolean).join(' · ') || 'No details'}

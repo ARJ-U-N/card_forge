@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/table'
 import { getInitials } from '@/lib/utils'
 import type { Folder, Member } from '@/lib/models/types'
+import { getMemberDisplayName } from '@/lib/models/types'
 
 interface Props {
   members: Member[]
@@ -46,6 +47,8 @@ interface Props {
   tableColumns?: string[]
   /** Per-column type metadata. Determines which columns are image columns. */
   tableColumnTypes?: Record<string, 'text' | 'image'>
+  /** Column name marked as the Table Name role (for display name) */
+  tableNameCol?: string
   selectedIds: Set<string>
   onSelectionChange: (ids: Set<string>) => void
   onEdit: (member: Member) => void
@@ -60,6 +63,7 @@ export function MemberTable({
   subfolders,
   tableColumns,
   tableColumnTypes,
+  tableNameCol,
   selectedIds,
   onSelectionChange,
   onEdit,
@@ -157,7 +161,7 @@ export function MemberTable({
                   <Checkbox
                     checked={selectedIds.has(m.id)}
                     onCheckedChange={() => toggleOne(m.id)}
-                    aria-label={`Select ${m.firstName || m.customFields?.[tableColumns?.[0] ?? ''] || 'row'}`}
+                    aria-label={`Select ${getMemberDisplayName(m, tableNameCol) || 'row'}`}
                   />
                 </TableCell>
                 {tableColumns && tableColumns.length > 0 ? (
@@ -185,7 +189,7 @@ export function MemberTable({
                         {m.profileImage && <AvatarImage src={m.profileImage} />}
                         <AvatarFallback className="text-xs">
                           {m.profileImage ? (
-                            getInitials(`${m.firstName} ${m.lastName}`)
+                            getInitials(getMemberDisplayName(m, tableNameCol))
                           ) : (
                             <UserIcon className="size-3.5" />
                           )}
@@ -193,7 +197,7 @@ export function MemberTable({
                       </Avatar>
                     </TableCell>
                     <TableCell className="font-medium">
-                      {m.firstName} {m.lastName}
+                      {getMemberDisplayName(m, tableNameCol) || 'Unnamed'}
                     </TableCell>
                     <TableCell>{m.dateOfBirth || '—'}</TableCell>
                     <TableCell>{m.title || '—'}</TableCell>

@@ -44,6 +44,46 @@ export interface Workspace {
 
 export type Gender = 'male' | 'female' | 'other' | ''
 
+/** Optional role flags for a table column. All flags default to false/undefined. */
+export interface ColumnRoles {
+  /** Column identifies the person/member's display name for search and UI. */
+  isTableName?: boolean
+  /** Column contains text data to be rendered as a Code 128 barcode. */
+  isBarcode?: boolean
+  /** Column contains text data to be rendered as a QR code. */
+  isQrCode?: boolean
+}
+
+/**
+ * Returns the column name marked as the Table Name, or undefined if none.
+ * Only one column should have this role at a time.
+ */
+export function getTableNameColumn(
+  roles?: Record<string, ColumnRoles>,
+): string | undefined {
+  if (!roles) return undefined
+  for (const [col, r] of Object.entries(roles)) {
+    if (r.isTableName) return col
+  }
+  return undefined
+}
+
+/**
+ * Returns a display name for a member.
+ * If a Table Name column is configured, uses customFields[tableNameCol].
+ * Otherwise falls back to `firstName lastName`.
+ */
+export function getMemberDisplayName(
+  member: Pick<Member, 'firstName' | 'lastName' | 'customFields'>,
+  tableNameCol?: string,
+): string {
+  if (tableNameCol) {
+    const val = member.customFields?.[tableNameCol]
+    if (val) return val
+  }
+  return `${member.firstName} ${member.lastName}`.trim()
+}
+
 /**
  * A folder (or subfolder) that organises members inside a workspace.
  * Root folders have `parentFolderId = null`; subfolders point to their parent.
@@ -58,6 +98,8 @@ export interface Folder {
   tableColumns?: string[]
   /** Per-column type metadata. Key = column heading, value = 'text' | 'image'. Columns not listed default to 'text'. */
   tableColumnTypes?: Record<string, 'text' | 'image'>
+  /** Per-column role metadata. Key = column heading, value = optional boolean flags. Columns not listed have no special role. */
+  tableColumnRoles?: Record<string, ColumnRoles>
   /** Expected total number of members for this folder */
   folderTotalNumber?: number
   /** ISO timestamp when teacher submitted/locked this folder. null = not submitted. */

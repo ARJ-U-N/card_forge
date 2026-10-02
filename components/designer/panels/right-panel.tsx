@@ -28,7 +28,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import type { CanvasElement, CardDocument } from '@/lib/models/types'
+import type { CanvasElement, CardDocument, ColumnRoles } from '@/lib/models/types'
 import { DYNAMIC_FIELDS } from './left-panel'
 
 interface Props {
@@ -39,6 +39,10 @@ interface Props {
   onDeleteElement: (id: string) => void
   onDuplicateElement: (id: string) => void
   onReorderElement: (id: string, direction: 'up' | 'down') => void
+  /** Table columns from the linked folder (if any) */
+  tableColumns?: string[]
+  /** Per-column role metadata */
+  tableColumnRoles?: Record<string, ColumnRoles>
 }
 
 type RightTab = 'customize' | 'layers'
@@ -68,6 +72,8 @@ export function RightPanel({
   onDeleteElement,
   onDuplicateElement,
   onReorderElement,
+  tableColumns,
+  tableColumnRoles,
 }: Props) {
   const [activeTab, setActiveTab] = useState<RightTab>('customize')
   const [radiusLocked, setRadiusLocked] = useState(true)
@@ -435,9 +441,24 @@ export function RightPanel({
                         <Select value={(el.props.fieldName as string) ?? 'employeeId'} onValueChange={(v) => updateProp('fieldName', v)}>
                           <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                           <SelectContent>
-                            {DYNAMIC_FIELDS.map((f) => (
-                              <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>
-                            ))}
+                            {/* Show QR-role columns if available, otherwise fall back to legacy */}
+                            {tableColumns && tableColumns.length > 0 ? (
+                              tableColumns
+                                .filter((col) => tableColumnRoles?.[col]?.isQrCode)
+                                .length > 0
+                                ? tableColumns
+                                    .filter((col) => tableColumnRoles?.[col]?.isQrCode)
+                                    .map((col) => (
+                                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                                    ))
+                                : tableColumns.map((col) => (
+                                    <SelectItem key={col} value={col}>{col}</SelectItem>
+                                  ))
+                            ) : (
+                              DYNAMIC_FIELDS.map((f) => (
+                                <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>
+                              ))
+                            )}
                           </SelectContent>
                         </Select>
                       </div>
@@ -451,9 +472,24 @@ export function RightPanel({
                           <Select value={(el.props.fieldName as string) ?? 'employeeId'} onValueChange={(v) => updateProp('fieldName', v)}>
                             <SelectTrigger className="h-7 text-xs"><SelectValue /></SelectTrigger>
                             <SelectContent>
-                              {DYNAMIC_FIELDS.map((f) => (
-                                <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>
-                              ))}
+                              {/* Show barcode-role columns if available, otherwise fall back to legacy */}
+                              {tableColumns && tableColumns.length > 0 ? (
+                                tableColumns
+                                  .filter((col) => tableColumnRoles?.[col]?.isBarcode)
+                                  .length > 0
+                                  ? tableColumns
+                                      .filter((col) => tableColumnRoles?.[col]?.isBarcode)
+                                      .map((col) => (
+                                        <SelectItem key={col} value={col}>{col}</SelectItem>
+                                      ))
+                                  : tableColumns.map((col) => (
+                                      <SelectItem key={col} value={col}>{col}</SelectItem>
+                                    ))
+                              ) : (
+                                DYNAMIC_FIELDS.map((f) => (
+                                  <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>
+                                ))
+                              )}
                             </SelectContent>
                           </Select>
                         </div>

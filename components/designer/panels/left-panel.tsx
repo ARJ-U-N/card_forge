@@ -2,10 +2,12 @@
 
 import { useRef, useState } from 'react'
 import {
+  BarcodeIcon,
   CameraIcon,
   CreditCardIcon,
   ImageIcon,
   PlusIcon,
+  QrCodeIcon,
   ShapesIcon,
   ShieldIcon,
   TypeIcon,
@@ -17,6 +19,7 @@ import type {
   CanvasElement,
   CardConfiguration,
   CardDocument,
+  ColumnRoles,
 } from '@/lib/models/types'
 import { CardOptionsPanel } from './card-options-panel'
 
@@ -56,6 +59,8 @@ interface Props {
   tableColumns?: string[]
   /** Per-column type metadata — determines image vs text columns */
   tableColumnTypes?: Record<string, 'text' | 'image'>
+  /** Per-column role metadata — determines barcode/QR/name columns */
+  tableColumnRoles?: Record<string, ColumnRoles>
 }
 
 const TABS = [
@@ -81,6 +86,7 @@ export function LeftPanel({
   onAddElement,
   tableColumns,
   tableColumnTypes,
+  tableColumnRoles,
 }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>('options')
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -177,7 +183,7 @@ export function LeftPanel({
     e.target.value = ''
   }
 
-  const addQRCode = () => {
+  const addQRCode = (fieldName = 'employeeId') => {
     onAddElement({
       id: nextId('qr'),
       type: 'image',
@@ -186,14 +192,14 @@ export function LeftPanel({
       rotation: 0,
       props: {
         src: '', qrCode: true, dynamic: true,
-        fieldName: 'employeeId', placeholder: true,
+        fieldName, placeholder: true,
         opacity: 1, borderSize: 0, borderColor: '#000000', borderRadius: 0,
       },
       locked: false, visible: true, zIndex: nextZ,
     })
   }
 
-  const addBarcode = () => {
+  const addBarcode = (fieldName = 'employeeId') => {
     onAddElement({
       id: nextId('bc'),
       type: 'image',
@@ -202,13 +208,21 @@ export function LeftPanel({
       rotation: 0,
       props: {
         src: '', barcode: true, dynamic: true,
-        fieldName: 'employeeId', barcodeFormat: 'CODE128',
+        fieldName, barcodeFormat: 'CODE128',
         placeholder: true,
         opacity: 1, borderSize: 0, borderColor: '#000000', borderRadius: 0,
       },
       locked: false, visible: true, zIndex: nextZ,
     })
   }
+
+  // Derive role-based columns
+  const barcodeColumns = tableColumns?.filter(
+    (col) => tableColumnRoles?.[col]?.isBarcode,
+  ) ?? []
+  const qrColumns = tableColumns?.filter(
+    (col) => tableColumnRoles?.[col]?.isQrCode,
+  ) ?? []
 
   // ── Shape helpers ─────────────────────────────────────────────────────
   const addShape = (shape: string) => {
@@ -418,15 +432,65 @@ export function LeftPanel({
             <Separator />
 
             <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Dynamic Member Barcodes
+            </h3>
+            <div className="flex flex-col gap-1">
+              {barcodeColumns.length > 0 ? (
+                barcodeColumns.map((col) => (
+                  <button
+                    key={col}
+                    type="button"
+                    onClick={() => addBarcode(col)}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    <BarcodeIcon className="size-3 text-amber-500" />
+                    {col}
+                  </button>
+                ))
+              ) : (
+                <p className="text-[10px] text-muted-foreground px-2">
+                  No barcode columns defined. Edit the table to mark columns as barcode.
+                </p>
+              )}
+            </div>
+
+            <Separator />
+
+            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
+              Dynamic Member QR Codes
+            </h3>
+            <div className="flex flex-col gap-1">
+              {qrColumns.length > 0 ? (
+                qrColumns.map((col) => (
+                  <button
+                    key={col}
+                    type="button"
+                    onClick={() => addQRCode(col)}
+                    className="flex items-center gap-2 rounded-md px-2 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground transition-colors"
+                  >
+                    <QrCodeIcon className="size-3 text-purple-500" />
+                    {col}
+                  </button>
+                ))
+              ) : (
+                <p className="text-[10px] text-muted-foreground px-2">
+                  No QR code columns defined. Edit the table to mark columns as QR.
+                </p>
+              )}
+            </div>
+
+            <Separator />
+
+            <h3 className="text-xs font-medium text-muted-foreground uppercase tracking-wider">
               Codes
             </h3>
             <div className="flex flex-col gap-1.5">
-              <button type="button" onClick={addQRCode}
+              <button type="button" onClick={() => addQRCode()}
                 className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors">
                 <svg className="size-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M3 3h8v8H3V3zm2 2v4h4V5H5zm8-2h8v8h-8V3zm2 2v4h4V5h-4zM3 13h8v8H3v-8zm2 2v4h4v-4H5zm13-2h1v2h-3v-2h2zm-3 4h1v4h-1v-4zm4-4h2v2h-2v-2zm0 4h2v2h1v2h-3v-4zm-2 2h1v2h-1v-2z"/></svg>
                 QR Code
               </button>
-              <button type="button" onClick={addBarcode}
+              <button type="button" onClick={() => addBarcode()}
                 className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors">
                 <svg className="size-3.5" viewBox="0 0 24 24" fill="currentColor"><path d="M2 4h2v16H2V4zm4 0h1v16H6V4zm2 0h2v16H8V4zm3 0h2v16h-2V4zm3 0h1v16h-1V4zm2 0h3v16h-3V4zm4 0h2v16h-2V4z"/></svg>
                 Barcode
@@ -445,11 +509,11 @@ export function LeftPanel({
               Add security elements to help verify card authenticity.
             </p>
 
-            <button type="button" onClick={addQRCode}
+            <button type="button" onClick={() => addQRCode()}
               className="flex items-center gap-2 rounded-lg border p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors">
               <ShieldIcon className="size-3.5" /> Verification QR Code
             </button>
-            <button type="button" onClick={addBarcode}
+            <button type="button" onClick={() => addBarcode()}
               className="flex items-center gap-2 rounded-lg border p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors">
               <ShieldIcon className="size-3.5" /> ID Barcode
             </button>

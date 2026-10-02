@@ -18,7 +18,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore'
 import { getDb } from './client'
-import { COLLECTIONS, type Folder } from '@/lib/models/types'
+import { COLLECTIONS, type ColumnRoles, type Folder } from '@/lib/models/types'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -51,6 +51,7 @@ function mapFolder(snap: DocumentSnapshot<DocumentData>): Folder | null {
     parentFolderId: d.parentFolderId ?? null,
     tableColumns: Array.isArray(d.tableColumns) ? d.tableColumns : undefined,
     tableColumnTypes: d.tableColumnTypes && typeof d.tableColumnTypes === 'object' ? d.tableColumnTypes : undefined,
+    tableColumnRoles: d.tableColumnRoles && typeof d.tableColumnRoles === 'object' ? d.tableColumnRoles : undefined,
     folderTotalNumber: typeof d.folderTotalNumber === 'number' ? d.folderTotalNumber : undefined,
     submittedAt: d.submittedAt ? toIso(d.submittedAt) : null,
     createdAt: toIso(d.createdAt),
@@ -124,6 +125,7 @@ export async function updateFolderColumns(
   columns: string[],
   merge = false,
   columnTypes?: Record<string, 'text' | 'image'>,
+  columnRoles?: Record<string, ColumnRoles>,
 ): Promise<void> {
   if (merge) {
     const folder = await getFolder(workspaceId, folderId)
@@ -135,6 +137,7 @@ export async function updateFolderColumns(
       updatedAt: serverTimestamp(),
     }
     if (columnTypes) updateData.tableColumnTypes = columnTypes
+    if (columnRoles) updateData.tableColumnRoles = columnRoles
     await updateDoc(folderDoc(workspaceId, folderId), updateData)
   } else {
     const updateData: Record<string, unknown> = {
@@ -142,6 +145,7 @@ export async function updateFolderColumns(
       updatedAt: serverTimestamp(),
     }
     if (columnTypes) updateData.tableColumnTypes = columnTypes
+    if (columnRoles) updateData.tableColumnRoles = columnRoles
     await updateDoc(folderDoc(workspaceId, folderId), updateData)
   }
 }

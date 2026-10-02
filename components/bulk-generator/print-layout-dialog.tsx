@@ -55,6 +55,7 @@ import {
   type PageLayout,
   type PrintPage,
 } from '@/lib/print-layout'
+import { generateVectorPDF } from '@/lib/vector-pdf-renderer'
 import { useAuth } from '@/components/providers/auth-provider'
 import {
   createPrintPreset,
@@ -72,12 +73,16 @@ interface Props {
   /** Physical card height in mm (from CardConfiguration). Defaults to CR-80. */
   cardHeightMm?: number
   trigger: React.ReactElement
+  /** Full Design object — required for vector PDF export */
+  design?: import('@/lib/models/types').Design | null
+  /** Member data — required for vector PDF export */
+  members?: import('@/lib/models/types').Member[]
 }
 
 // Page dimensions for preview scaling
 const PREVIEW_HEIGHT = 500
 
-export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHeightMm, trigger }: Props) {
+export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHeightMm, trigger, design, members }: Props) {
   const { user } = useAuth()
   const workspaceId = user?.workspaceId ?? ''
 
@@ -217,6 +222,46 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
       setExporting(false)
     }
   }, [cards, config, cardOrientation, totalPages, cancelled])
+
+  // ── Export Vector PDF ─────────────────────────────────────────────────
+  const handleExportVectorPDF = useCallback(async () => {
+    if (!design || !members || members.length === 0) {
+      toast.error('Design and member data are required for vector PDF export')
+      return
+    }
+    setExporting(true)
+    setCancelled(false)
+    setExportProgress({ current: 0, total: totalPages, status: 'Starting vector PDF…' })
+
+    try {
+      const blob = await generateVectorPDF({
+        design,
+        members,
+        config,
+        renderedCards: cards,
+        onProgress: (c, t, s) => {
+          setExportProgress({ current: c, total: t, status: s })
+        },
+      })
+
+      if (!cancelled) {
+        const url = URL.createObjectURL(blob)
+        const link = document.createElement('a')
+        link.download = `id-cards-vector-${new Date().toISOString().slice(0, 10)}.pdf`
+        link.href = url
+        link.click()
+        URL.revokeObjectURL(url)
+        toast.success('Vector PDF exported successfully', {
+          description: `${members.length} cards rendered as vector elements.`,
+        })
+      }
+    } catch (error) {
+      console.error(error)
+      toast.error('Vector PDF export failed')
+    } finally {
+      setExporting(false)
+    }
+  }, [design, members, config, totalPages, cancelled, cards])
 
   // ── Export images ─────────────────────────────────────────────────────
   const handleExportImages = useCallback(async (format: 'png' | 'jpeg') => {
@@ -544,6 +589,10 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
               <Button size="sm" onClick={handleExportPDF} disabled={exporting || cards.length === 0}>
                 {exporting ? <Spinner data-icon="inline-start" /> : <FileIcon data-icon="inline-start" />}
                 Export PDF
+              </Button>
+              <Button size="sm" variant="secondary" onClick={handleExportVectorPDF} disabled={exporting || !design || !members || members.length === 0}>
+                {exporting ? <Spinner data-icon="inline-start" /> : <FileIcon data-icon="inline-start" />}
+                Export PDF (Vector)
               </Button>
               <Button variant="outline" size="sm" onClick={() => handleExportImages('png')} disabled={exporting}>
                 <ImageIcon data-icon="inline-start" /> Export PNGs

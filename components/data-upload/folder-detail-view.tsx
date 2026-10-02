@@ -49,6 +49,7 @@ import { subscribeFolders, getFolder, submitFolder } from '@/lib/firebase/folder
 import { subscribeMembers } from '@/lib/firebase/member-repository'
 import { exportMembersToXlsx, exportFolderDataToXlsx } from '@/lib/export-members'
 import type { Folder, Member } from '@/lib/models/types'
+import { getTableNameColumn } from '@/lib/models/types'
 import { MemberTable } from './member-table'
 import { SubfolderPanel } from './subfolder-panel'
 import { AddMemberDialog } from './add-member-dialog'
@@ -132,6 +133,12 @@ export function FolderDetailView({ folderId }: Props) {
     [allFolders, folderId],
   )
 
+  // Derive the column marked as "Table Name" (if any)
+  const tableNameCol = useMemo(
+    () => getTableNameColumn(folder?.tableColumnRoles),
+    [folder?.tableColumnRoles],
+  )
+
   // Filter members by search + selected subfolder
   const filtered = useMemo(() => {
     let list = members
@@ -147,11 +154,15 @@ export function FolderDetailView({ folderId }: Props) {
           m.firstName.toLowerCase().includes(q) ||
           m.lastName.toLowerCase().includes(q) ||
           m.employeeId.toLowerCase().includes(q) ||
-          m.department.toLowerCase().includes(q),
+          m.department.toLowerCase().includes(q) ||
+          // Search the Table Name column value (from customFields) if configured
+          (tableNameCol && (m.customFields?.[tableNameCol] ?? '').toLowerCase().includes(q)) ||
+          // Also search all customFields values so dynamic table data is findable
+          Object.values(m.customFields ?? {}).some((v) => v.toLowerCase().includes(q)),
       )
     }
     return list
-  }, [members, search, selectedSubfolder])
+  }, [members, search, selectedSubfolder, tableNameCol])
 
   const handleExport = () => {
     exportMembersToXlsx(filtered, folder?.name ?? 'members')
@@ -425,6 +436,7 @@ export function FolderDetailView({ folderId }: Props) {
               subfolders={subfolders}
               tableColumns={folder?.tableColumns}
               tableColumnTypes={folder?.tableColumnTypes}
+              tableNameCol={tableNameCol}
               selectedIds={selectedIds}
               onSelectionChange={setSelectedIds}
               onEdit={(m) => canEdit ? setEditMember(m) : undefined}
@@ -504,6 +516,7 @@ export function FolderDetailView({ folderId }: Props) {
         folderId={folderId}
         existingColumns={folder?.tableColumns}
         existingColumnTypes={folder?.tableColumnTypes}
+        existingColumnRoles={folder?.tableColumnRoles}
       />
 
       {deleteIds.length > 0 && (
