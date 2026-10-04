@@ -49,11 +49,14 @@ service cloud.firestore {
     }
 
     // ── Check if a folder is submitted/locked ──
-    // Uses EXISTING document state (resource.data) so the initial
-    // submit write (setting submittedAt) is allowed.
+    // A folder is considered locked when submittedAt is set AND editUnlocked
+    // is not true. Admin approval sets editUnlocked=true to temporarily allow
+    // edits; re-submitting resets editUnlocked to false.
     function isFolderSubmitted(workspaceId, folderId) {
-      return 'submittedAt' in get(/databases/$(database)/documents/workspaces/$(workspaceId)/folders/$(folderId)).data
-        && get(/databases/$(database)/documents/workspaces/$(workspaceId)/folders/$(folderId)).data.submittedAt != null;
+      let folderData = get(/databases/$(database)/documents/workspaces/$(workspaceId)/folders/$(folderId)).data;
+      return 'submittedAt' in folderData
+        && folderData.submittedAt != null
+        && !('editUnlocked' in folderData && folderData.editUnlocked == true);
     }
 
     // ── Workspaces ──
@@ -84,8 +87,10 @@ service cloud.firestore {
       }
 
       // ── Folders (workspace subcollection) ──
-      // For the main folder itself: check resource.data.submittedAt (current state)
+      // For the main folder itself: check resource.data (current state)
       // so the initial submit (setting submittedAt) is allowed.
+      // editUnlocked=true (set by admin) allows portal users to update
+      // (including re-submitting, which resets editUnlocked to false).
       // For subfolders: check the parent folder's lock state.
       match /folders/{folderId} {
         allow read: if isWorkspaceMember(workspaceId);
@@ -98,7 +103,8 @@ service cloud.firestore {
         allow update: if isWorkspaceMember(workspaceId)
           && request.resource.data.workspaceId == workspaceId
           && (isWorkspaceOwner(workspaceId)
-            || !('submittedAt' in resource.data) || resource.data.submittedAt == null);
+            || !('submittedAt' in resource.data) || resource.data.submittedAt == null
+            || ('editUnlocked' in resource.data && resource.data.editUnlocked == true));
         allow delete: if isWorkspaceMember(workspaceId)
           && (isWorkspaceOwner(workspaceId)
             || !('submittedAt' in resource.data) || resource.data.submittedAt == null);

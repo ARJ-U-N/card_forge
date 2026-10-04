@@ -104,6 +104,8 @@ export interface Folder {
   folderTotalNumber?: number
   /** ISO timestamp when teacher submitted/locked this folder. null = not submitted. */
   submittedAt?: string | null
+  /** True when an admin has approved an edit-permission request after submission. */
+  editUnlocked?: boolean
   createdAt: string
   updatedAt: string
 }
@@ -193,6 +195,27 @@ export interface ParentShare {
   enabled: boolean
   createdAt: string
   updatedAt: string
+}
+
+/**
+ * A portal user's request to re-edit a submitted (locked) College folder.
+ * Created by the portal user, reviewed (approved/rejected) by the admin.
+ */
+export interface EditRequest {
+  id: string
+  workspaceId: string
+  /** The root College folder this request pertains to. */
+  folderId: string
+  /** Denormalized folder name for display. */
+  folderName: string
+  /** The portal user's Firebase Auth UID. */
+  requesterUserId: string
+  /** The portal user's email. */
+  requesterEmail: string
+  status: 'pending' | 'approved' | 'rejected'
+  createdAt: string
+  reviewedAt?: string | null
+  reviewedBy?: string | null
 }
 
 // ---------------------------------------------------------------------------
@@ -331,5 +354,6 @@ export const COLLECTIONS = {
   assets: 'assets',
   parentShares: 'parentShares',
   printPresets: 'printPresets',
+  editRequests: 'editRequests',
 } as const
 

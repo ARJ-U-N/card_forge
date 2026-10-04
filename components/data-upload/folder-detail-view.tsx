@@ -15,6 +15,7 @@ import {
   PlusIcon,
   SearchIcon,
   SendIcon,
+  ShieldAlertIcon,
   TableIcon,
   UploadIcon,
   ZapIcon,
@@ -48,8 +49,9 @@ import { usePortal } from '@/components/providers/portal-provider'
 import { subscribeFolders, getFolder, submitFolder } from '@/lib/firebase/folder-repository'
 import { subscribeMembers } from '@/lib/firebase/member-repository'
 import { exportMembersToXlsx, exportFolderDataToXlsx } from '@/lib/export-members'
-import type { Folder, Member } from '@/lib/models/types'
+import type { Folder, Member, EditRequest } from '@/lib/models/types'
 import { getTableNameColumn } from '@/lib/models/types'
+import { getPendingRequest, createEditRequest } from '@/lib/firebase/edit-request-repository'
 import { MemberTable } from './member-table'
 import { SubfolderPanel } from './subfolder-panel'
 import { AddMemberDialog } from './add-member-dialog'
@@ -91,8 +93,13 @@ export function FolderDetailView({ folderId }: Props) {
   const [submitOpen, setSubmitOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
+  // Edit-permission request state (portal users on submitted folders)
+  const [requestPending, setRequestPending] = useState(false)
+  const [requesting, setRequesting] = useState(false)
+
   // Lock state — submitted folders are read-only for non-owners
-  const isLocked = !!folder?.submittedAt
+  // editUnlocked allows editing even when submittedAt is set (admin-approved)
+  const isLocked = !!folder?.submittedAt && !folder?.editUnlocked
   const canEdit = !isLocked || isOwner
 
   // Load folder info
@@ -214,11 +221,42 @@ export function FolderDetailView({ folderId }: Props) {
       // Re-fetch folder to update local state
       const updated = await getFolder(workspaceId, folderId)
       if (updated) setFolder(updated)
+      setRequestPending(false)
     } catch {
       toast.error('Failed to submit folder')
     } finally {
       setSubmitting(false)
       setSubmitOpen(false)
+    }
+  }
+
+  // Check for pending edit-permission request (portal users)
+  useEffect(() => {
+    if (!workspaceId || !folderId || !isPortalUser) return
+    getPendingRequest(workspaceId, folderId)
+      .then((r) => setRequestPending(!!r))
+      .catch(() => {})
+  }, [workspaceId, folderId, isPortalUser, folder?.submittedAt])
+
+  const handleRequestPermission = async () => {
+    if (!user || !folder) return
+    try {
+      setRequesting(true)
+      await createEditRequest(
+        workspaceId,
+        folderId,
+        folder.name,
+        user.authUid,
+        user.email,
+      )
+      setRequestPending(true)
+      toast.success('Permission request sent', {
+        description: 'The admin will review your request.',
+      })
+    } catch {
+      toast.error('Failed to send request')
+    } finally {
+      setRequesting(false)
     }
   }
 
@@ -293,6 +331,24 @@ export function FolderDetailView({ folderId }: Props) {
             <Badge variant="secondary" className="gap-1">
               <LockIcon className="size-3" />
               Submitted
+            </Badge>
+          )}
+          {/* Portal user: Request Permission when locked */}
+          {isLocked && isPortalUser && !requestPending && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleRequestPermission}
+              disabled={requesting}
+            >
+              <ShieldAlertIcon data-icon="inline-start" />
+              {requesting ? 'Requesting…' : 'Request Permission'}
+            </Button>
+          )}
+          {isLocked && isPortalUser && requestPending && (
+            <Badge variant="outline" className="gap-1 text-amber-600 border-amber-300">
+              <ShieldAlertIcon className="size-3" />
+              Permission Requested
             </Badge>
           )}
           {!isLocked && folder && (

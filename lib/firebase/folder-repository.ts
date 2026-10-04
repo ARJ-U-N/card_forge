@@ -54,6 +54,7 @@ function mapFolder(snap: DocumentSnapshot<DocumentData>): Folder | null {
     tableColumnRoles: d.tableColumnRoles && typeof d.tableColumnRoles === 'object' ? d.tableColumnRoles : undefined,
     folderTotalNumber: typeof d.folderTotalNumber === 'number' ? d.folderTotalNumber : undefined,
     submittedAt: d.submittedAt ? toIso(d.submittedAt) : null,
+    editUnlocked: !!d.editUnlocked,
     createdAt: toIso(d.createdAt),
     updatedAt: toIso(d.updatedAt),
   }
@@ -111,6 +112,21 @@ export async function submitFolder(
 ): Promise<void> {
   await updateDoc(folderDoc(workspaceId, folderId), {
     submittedAt: serverTimestamp(),
+    editUnlocked: false,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Unlock a submitted folder for editing (admin approval).
+ * Preserves submittedAt for audit; sets editUnlocked = true.
+ */
+export async function unlockFolder(
+  workspaceId: string,
+  folderId: string,
+): Promise<void> {
+  await updateDoc(folderDoc(workspaceId, folderId), {
+    editUnlocked: true,
     updatedAt: serverTimestamp(),
   })
 }

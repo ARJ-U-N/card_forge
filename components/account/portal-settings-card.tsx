@@ -3,10 +3,13 @@
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import {
+  CheckIcon,
   GlobeIcon,
   PowerIcon,
   SettingsIcon,
+  ShieldAlertIcon,
   Trash2Icon,
+  XIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -35,8 +38,14 @@ import {
   updatePortalSettings,
   deletePortal,
 } from '@/lib/firebase/portal-repository'
+import {
+  subscribeEditRequests,
+  approveEditRequest,
+  rejectEditRequest,
+} from '@/lib/firebase/edit-request-repository'
+import { unlockFolder } from '@/lib/firebase/folder-repository'
 import { PortalSettingsDialog } from '@/components/data-upload/portal-settings-dialog'
-import type { Portal } from '@/lib/models/types'
+import type { Portal, EditRequest } from '@/lib/models/types'
 
 export function PortalSettingsCard() {
   const { user } = useAuth()
@@ -50,6 +59,10 @@ export function PortalSettingsCard() {
   const [deleting, setDeleting] = useState(false)
   const [managePortal, setManagePortal] = useState<Portal | null>(null)
 
+  // Edit-permission requests
+  const [editRequests, setEditRequests] = useState<EditRequest[]>([])
+  const [reviewingId, setReviewingId] = useState<string | null>(null)
+
   useEffect(() => {
     if (!workspaceId) return
     const unsub = subscribePortalsForWorkspace(
@@ -62,6 +75,17 @@ export function PortalSettingsCard() {
     )
     return unsub
   }, [workspaceId])
+
+  // Subscribe to edit-permission requests
+  useEffect(() => {
+    if (!workspaceId || !isOwner) return
+    const unsub = subscribeEditRequests(
+      workspaceId,
+      setEditRequests,
+      () => {},
+    )
+    return unsub
+  }, [workspaceId, isOwner])
 
   const activeCount = portals.filter((p) => p.enabled).length
   const totalCount = portals.length
@@ -95,6 +119,35 @@ export function PortalSettingsCard() {
     } finally {
       setDeleting(false)
       setDeleteTarget(null)
+    }
+  }
+
+  const pendingRequests = editRequests.filter((r) => r.status === 'pending')
+
+  const handleApproveRequest = async (req: EditRequest) => {
+    if (!user) return
+    try {
+      setReviewingId(req.id)
+      await approveEditRequest(workspaceId, req.id, user.id)
+      await unlockFolder(workspaceId, req.folderId)
+      toast.success(`Edit permission approved for "${req.folderName}"`)
+    } catch {
+      toast.error('Failed to approve request')
+    } finally {
+      setReviewingId(null)
+    }
+  }
+
+  const handleRejectRequest = async (req: EditRequest) => {
+    if (!user) return
+    try {
+      setReviewingId(req.id)
+      await rejectEditRequest(workspaceId, req.id, user.id)
+      toast.success(`Edit permission rejected for "${req.folderName}"`)
+    } catch {
+      toast.error('Failed to reject request')
+    } finally {
+      setReviewingId(null)
     }
   }
 
@@ -227,6 +280,58 @@ export function PortalSettingsCard() {
           )}
         </CardContent>
       </Card>
+
+      {/* Pending Edit-Permission Requests */}
+      {pendingRequests.length > 0 && (
+        <Card className="max-w-2xl">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ShieldAlertIcon className="size-4 text-amber-500" />
+              Edit Permission Requests
+            </CardTitle>
+            <CardDescription>
+              Portal users have requested permission to edit submitted Colleges.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-col gap-2">
+              {pendingRequests.map((req) => (
+                <div
+                  key={req.id}
+                  className="flex items-center gap-3 rounded-lg border border-amber-200 bg-amber-50/50 dark:border-amber-900 dark:bg-amber-950/20 p-3"
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="text-sm font-medium">{req.folderName}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {req.requesterEmail} &middot; {new Date(req.createdAt).toLocaleDateString()}
+                    </div>
+                  </div>
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => handleApproveRequest(req)}
+                    disabled={reviewingId === req.id}
+                    className="text-xs gap-1"
+                  >
+                    <CheckIcon className="size-3" />
+                    Accept
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => handleRejectRequest(req)}
+                    disabled={reviewingId === req.id}
+                    className="text-xs gap-1"
+                  >
+                    <XIcon className="size-3" />
+                    Reject
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Manage Settings Dialog — reuses existing PortalSettingsDialog */}
       {managePortal && (
