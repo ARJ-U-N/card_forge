@@ -94,6 +94,8 @@ interface Props {
   selectedElementId: string | null
   onSelectElement: (id: string | null) => void
   onUpdateElement: (id: string, updates: Partial<CanvasElement>) => void
+  /** Called once before a canvas drag/resize starts, to capture undo snapshot */
+  onBeforeChange?: () => void
   /** Designer-only: element IDs with Max Length Text preview enabled */
   maxLengthPreviewIds?: Set<string>
   /** Designer-only: member data for Max Length Text lookup */
@@ -107,6 +109,7 @@ export function CardCanvas({
   selectedElementId,
   onSelectElement,
   onUpdateElement,
+  onBeforeChange,
   maxLengthPreviewIds,
   members,
 }: Props) {
@@ -127,6 +130,7 @@ export function CardCanvas({
     if (el.locked) return
     e.stopPropagation()
     e.preventDefault()
+    onBeforeChange?.()
     onSelectElement(el.id)
     setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height })
   }

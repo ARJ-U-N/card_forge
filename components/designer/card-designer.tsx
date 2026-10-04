@@ -1,5 +1,5 @@
 'use client'
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
@@ -64,6 +64,14 @@ export function CardDesigner({ designId }: Props) {
   const [members, setMembers] = useState<Member[]>([])
   const [maxLengthPreviewIds, setMaxLengthPreviewIds] = useState<Set<string>>(new Set())
 
+  // ── Undo / Redo — Designer-session-only (never persisted) ───────────────
+  const frontDocRef = useRef(frontDoc)
+  const backDocRef = useRef(backDoc)
+  const undoStackRef = useRef<{ front: CardDocument; back: CardDocument }[]>([])
+  const redoStackRef = useRef<{ front: CardDocument; back: CardDocument }[]>([])
+  const panelSnapshotTakenRef = useRef(false)
+  const panelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // Load design
   useEffect(() => {
     if (!workspaceId || !designId) return
@@ -93,6 +101,32 @@ export function CardDesigner({ designId }: Props) {
 
   const activeDoc = activeSide === 'front' ? frontDoc : backDoc
   const setActiveDoc = activeSide === 'front' ? setFrontDoc : setBackDoc
+
+  // Keep refs in sync with latest state (updated after each render)
+  useEffect(() => { frontDocRef.current = frontDoc }, [frontDoc])
+  useEffect(() => { backDocRef.current = backDoc }, [backDoc])
+
+  // Capture current state to undo stack (refs hold pre-edit values)
+  const pushUndo = useCallback(() => {
+    undoStackRef.current = [...undoStackRef.current.slice(-49), { front: frontDocRef.current, back: backDocRef.current }]
+    redoStackRef.current = []
+  }, [])
+
+  const undo = useCallback(() => {
+    if (undoStackRef.current.length === 0) return
+    redoStackRef.current.push({ front: frontDocRef.current, back: backDocRef.current })
+    const prev = undoStackRef.current.pop()!
+    setFrontDoc(prev.front)
+    setBackDoc(prev.back)
+  }, [])
+
+  const redo = useCallback(() => {
+    if (redoStackRef.current.length === 0) return
+    undoStackRef.current.push({ front: frontDocRef.current, back: backDocRef.current })
+    const next = redoStackRef.current.pop()!
+    setFrontDoc(next.front)
+    setBackDoc(next.back)
+  }, [])
 
   // ── Save ──────────────────────────────────────────────────────────────
   const handleSave = async () => {
@@ -137,30 +171,48 @@ export function CardDesigner({ designId }: Props) {
     [activeSide],
   )
 
+  // Property-panel variant: debounced undo snapshot so rapid edits
+  // (typing numbers, dragging color picker) create one undo entry.
+  const handleUpdateElementWithUndo = useCallback(
+    (id: string, updates: Partial<CanvasElement>) => {
+      if (!panelSnapshotTakenRef.current) {
+        pushUndo()
+        panelSnapshotTakenRef.current = true
+      }
+      if (panelTimerRef.current) clearTimeout(panelTimerRef.current)
+      panelTimerRef.current = setTimeout(() => { panelSnapshotTakenRef.current = false }, 500)
+      handleUpdateElement(id, updates)
+    },
+    [handleUpdateElement, pushUndo],
+  )
+
   const handleAddElement = useCallback(
     (element: CanvasElement) => {
+      pushUndo()
       setActiveDoc((prev) => ({
         ...prev,
         elements: [...prev.elements, element],
       }))
       setSelectedElementId(element.id)
     },
-    [activeSide],
+    [activeSide, pushUndo],
   )
 
   const handleDeleteElement = useCallback(
     (id: string) => {
+      pushUndo()
       setActiveDoc((prev) => ({
         ...prev,
         elements: prev.elements.filter((el) => el.id !== id),
       }))
       if (selectedElementId === id) setSelectedElementId(null)
     },
-    [activeSide, selectedElementId],
+    [activeSide, selectedElementId, pushUndo],
   )
 
   const handleDuplicateElement = useCallback(
     (id: string) => {
+      pushUndo()
       setActiveDoc((prev) => {
         const source = prev.elements.find((el) => el.id === id)
         if (!source) return prev
@@ -176,11 +228,12 @@ export function CardDesigner({ designId }: Props) {
         return { ...prev, elements: [...prev.elements, clone] }
       })
     },
-    [activeSide],
+    [activeSide, pushUndo],
   )
 
   const handleReorderElement = useCallback(
     (id: string, direction: 'up' | 'down') => {
+      pushUndo()
       setActiveDoc((prev) => {
         const sorted = [...prev.elements].sort((a, b) => a.zIndex - b.zIndex)
         const idx = sorted.findIndex((el) => el.id === id)
@@ -201,17 +254,34 @@ export function CardDesigner({ designId }: Props) {
         }
       })
     },
-    [activeSide],
+    [activeSide, pushUndo],
   )
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement).tagName
+      const isEditable = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || (e.target as HTMLElement).isContentEditable
+      const key = e.key.toLowerCase()
+
+      // Undo: Ctrl+Z / Cmd+Z (without Shift)
+      if ((e.ctrlKey || e.metaKey) && key === 'z' && !e.shiftKey) {
+        if (isEditable) return // let native input undo work
+        e.preventDefault()
+        undo()
+        return
+      }
+      // Redo: Ctrl+Y / Cmd+Y or Ctrl+Shift+Z / Cmd+Shift+Z
+      if ((e.ctrlKey || e.metaKey) && (key === 'y' || (key === 'z' && e.shiftKey))) {
+        if (isEditable) return // let native input redo work
+        e.preventDefault()
+        redo()
+        return
+      }
+
       if (!selectedElementId) return
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        // Don't delete if an input is focused
-        const tag = (e.target as HTMLElement).tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+        if (isEditable) return
         // Don't delete locked elements
         const el = activeDoc.elements.find((el) => el.id === selectedElementId)
         if (el?.locked) return
@@ -225,7 +295,7 @@ export function CardDesigner({ designId }: Props) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedElementId, handleDeleteElement, handleDuplicateElement, activeDoc])
+  }, [selectedElementId, handleDeleteElement, handleDuplicateElement, activeDoc, undo, redo])
 
   // ── Loading / Not found ───────────────────────────────────────────────
   if (loading) {
@@ -350,6 +420,7 @@ export function CardDesigner({ designId }: Props) {
             selectedElementId={selectedElementId}
             onSelectElement={setSelectedElementId}
             onUpdateElement={handleUpdateElement}
+            onBeforeChange={pushUndo}
             maxLengthPreviewIds={maxLengthPreviewIds}
             members={members}
           />
@@ -359,7 +430,7 @@ export function CardDesigner({ designId }: Props) {
           activeDoc={activeDoc}
           selectedElementId={selectedElementId}
           onSelectElement={setSelectedElementId}
-          onUpdateElement={handleUpdateElement}
+          onUpdateElement={handleUpdateElementWithUndo}
           onDeleteElement={handleDeleteElement}
           onDuplicateElement={handleDuplicateElement}
           onReorderElement={handleReorderElement}
