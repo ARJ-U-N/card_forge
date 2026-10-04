@@ -48,6 +48,7 @@ export function CardDesigner({ designId }: Props) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [name, setName] = useState('')
+  const [draftRestored, setDraftRestored] = useState(false)
 
   // Linked folder (for table-based dynamic fields)
   const [linkedFolder, setLinkedFolder] = useState<Folder | null>(null)
@@ -72,7 +73,11 @@ export function CardDesigner({ designId }: Props) {
   const panelSnapshotTakenRef = useRef(false)
   const panelTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  // Load design
+  // ── Draft constants ──
+  const DRAFT_KEY = `cardforge-designer-draft-${designId}`
+  const DRAFT_VERSION = 1
+
+  // Load design (and restore draft if one exists)
   useEffect(() => {
     if (!workspaceId || !designId) return
     setLoading(true)
@@ -83,6 +88,37 @@ export function CardDesigner({ designId }: Props) {
         setConfig(d.cardConfiguration)
         setFrontDoc(d.frontDocument)
         setBackDoc(d.backDocument)
+
+        // Check localStorage for a draft
+        try {
+          const raw = localStorage.getItem(DRAFT_KEY)
+          if (raw) {
+            const draft = JSON.parse(raw)
+            if (
+              draft &&
+              draft.designId === designId &&
+              draft.version === DRAFT_VERSION &&
+              draft.config &&
+              draft.frontDocument &&
+              draft.backDocument
+            ) {
+              setName(draft.name ?? d.name)
+              setConfig(draft.config)
+              setFrontDoc(draft.frontDocument)
+              setBackDoc(draft.backDocument)
+              setDraftRestored(true)
+              toast.info('Unsaved draft restored', {
+                description: 'Your previous unsaved changes have been restored from local storage.',
+              })
+            } else {
+              localStorage.removeItem(DRAFT_KEY)
+            }
+          }
+        } catch {
+          // Invalid JSON — remove and continue with saved design
+          localStorage.removeItem(DRAFT_KEY)
+        }
+
         // Load the linked folder for table-based dynamic fields
         if (d.folderId) {
           const f = await getFolder(workspaceId, d.folderId)
@@ -101,6 +137,30 @@ export function CardDesigner({ designId }: Props) {
 
   const activeDoc = activeSide === 'front' ? frontDoc : backDoc
   const setActiveDoc = activeSide === 'front' ? setFrontDoc : setBackDoc
+
+  // ── Draft: debounced write to localStorage (1s after last state change) ──
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    // Don't write drafts while still loading the design
+    if (loading || !config) return
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current)
+    draftTimerRef.current = setTimeout(() => {
+      try {
+        localStorage.setItem(DRAFT_KEY, JSON.stringify({
+          designId,
+          version: DRAFT_VERSION,
+          savedAt: new Date().toISOString(),
+          name,
+          config,
+          frontDocument: frontDoc,
+          backDocument: backDoc,
+        }))
+      } catch {
+        // Quota exceeded or other error — fail silently
+      }
+    }, 1000)
+    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current) }
+  }, [name, config, frontDoc, backDoc, designId, loading])
 
   // Keep refs in sync with latest state (updated after each render)
   useEffect(() => { frontDocRef.current = frontDoc }, [frontDoc])
@@ -140,6 +200,9 @@ export function CardDesigner({ designId }: Props) {
         frontDocument: frontDoc,
         backDocument: backDoc,
       })
+      // Clear draft on successful save
+      try { localStorage.removeItem(DRAFT_KEY) } catch {}
+      setDraftRestored(false)
       setSaved(true)
       toast.success('Design saved successfully', {
         description: `"${name}" has been saved with all elements and configuration.`,
@@ -387,6 +450,9 @@ export function CardDesigner({ designId }: Props) {
         </div>
 
         {/* Save */}
+        {draftRestored && (
+          <span className="text-[10px] text-amber-500 font-medium animate-pulse">Unsaved draft</span>
+        )}
         <Button size="sm" onClick={handleSave} disabled={saving}>
           {saving ? (
             <Spinner data-icon="inline-start" />
