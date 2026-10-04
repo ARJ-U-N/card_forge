@@ -1,12 +1,14 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { cn } from '@/lib/utils'
 import type {
   CanvasElement,
   CardConfiguration,
   CardDocument,
+  Member,
 } from '@/lib/models/types'
+import { resolveDynamicText } from '@/lib/card-renderer'
 
 // CR-80 defaults (pixels): 324 × 204
 const DEFAULT_CARD_W = 324
@@ -92,6 +94,10 @@ interface Props {
   selectedElementId: string | null
   onSelectElement: (id: string | null) => void
   onUpdateElement: (id: string, updates: Partial<CanvasElement>) => void
+  /** Designer-only: element IDs with Max Length Text preview enabled */
+  maxLengthPreviewIds?: Set<string>
+  /** Designer-only: member data for Max Length Text lookup */
+  members?: Member[]
 }
 
 export function CardCanvas({
@@ -101,6 +107,8 @@ export function CardCanvas({
   selectedElementId,
   onSelectElement,
   onUpdateElement,
+  maxLengthPreviewIds,
+  members,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -207,6 +215,30 @@ export function CardCanvas({
     }
   }
 
+  // ── Max Length Text: compute longest value per field (Designer-only) ──
+  const maxLengthValues = useMemo(() => {
+    const map = new Map<string, string>()
+    if (!members || members.length === 0) return map
+    // Collect all field names that are currently enabled
+    const enabledFields = new Set<string>()
+    for (const el of doc.elements) {
+      if (el.type === 'field' && maxLengthPreviewIds?.has(el.id) && el.props.fieldName) {
+        enabledFields.add(el.props.fieldName as string)
+      }
+    }
+    for (const fieldName of enabledFields) {
+      let longest = ''
+      for (const m of members) {
+        // Use the same resolver as production rendering
+        const val = resolveDynamicText(m, fieldName)
+        // Skip unresolved placeholders like "{fieldName}"
+        if (val && !val.startsWith('{') && val.length > longest.length) longest = val
+      }
+      if (longest) map.set(fieldName, longest)
+    }
+    return map
+  }, [members, doc.elements, maxLengthPreviewIds])
+
   // ── Element renderers ─────────────────────────────────────────────────
   const renderElement = (el: CanvasElement) => {
     if (!el.visible) return null
@@ -251,7 +283,10 @@ export function CardCanvas({
           </div>
         )
 
-      case 'field':
+      case 'field': {
+        const fieldName = (el.props.fieldName as string) ?? ''
+        const isMaxLen = maxLengthPreviewIds?.has(el.id) ?? false
+        const maxVal = isMaxLen ? maxLengthValues.get(fieldName) : undefined
         return (
           <div key={el.id} style={wrapperStyle} onMouseDown={(e) => handleMouseDown(e, el)}
             className={cn(
@@ -268,11 +303,16 @@ export function CardCanvas({
               textAlign: (el.props.textAlign as CanvasRenderingContext2D['textAlign']) ?? 'left',
               whiteSpace: 'pre-wrap', lineHeight: 1.3, display: 'block', width: '100%',
             }}>
-              {(el.props.label as string) ?? ''}<span className="bg-blue-100/50 text-blue-700 rounded px-0.5">{`{${el.props.fieldName}}`}</span>
+              {maxVal ? (
+                <>{(el.props.label as string) ?? ''}<span className="bg-amber-100/70 text-amber-800 rounded px-0.5">{maxVal}</span></>
+              ) : (
+                <>{(el.props.label as string) ?? ''}<span className="bg-blue-100/50 text-blue-700 rounded px-0.5">{`{${fieldName}}`}</span></>
+              )}
             </span>
             {isSelected && <ResizeHandles el={el} />}
           </div>
         )
+      }
 
       case 'image': {
         const isQR = !!el.props.qrCode

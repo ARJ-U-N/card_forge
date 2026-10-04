@@ -77,7 +77,7 @@ function cardPixelSize(config: CardConfiguration): { w: number; h: number } {
     h: Math.round(hmm * PX_PER_MM),
   }
 }
-function resolveDynamicText(member: Member, fieldName: string): string {
+export function resolveDynamicText(member: Member, fieldName: string): string {
   // Prefer customFields (parent form stores all values here).
   // Fall back to built-in Member fields for normal member rendering.
   const custom = member.customFields?.[fieldName]

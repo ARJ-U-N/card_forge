@@ -1,5 +1,4 @@
 'use client'
-
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -26,10 +25,12 @@ import type {
   ColumnRoles,
   Design,
   Folder,
+  Member,
 } from '@/lib/models/types'
 import { LeftPanel } from './panels/left-panel'
 import { RightPanel } from './panels/right-panel'
 import { CardCanvas } from './canvas/card-canvas'
+import { getMembersInFolder } from '@/lib/firebase/member-repository'
 
 interface Props {
   designId: string
@@ -59,6 +60,10 @@ export function CardDesigner({ designId }: Props) {
   const [frontDoc, setFrontDoc] = useState<CardDocument>({ elements: [], background: '#ffffff' })
   const [backDoc, setBackDoc] = useState<CardDocument>({ elements: [], background: '#ffffff' })
 
+  // ── Max Length Text — Designer-only preview state (never persisted) ──
+  const [members, setMembers] = useState<Member[]>([])
+  const [maxLengthPreviewIds, setMaxLengthPreviewIds] = useState<Set<string>>(new Set())
+
   // Load design
   useEffect(() => {
     if (!workspaceId || !designId) return
@@ -79,6 +84,12 @@ export function CardDesigner({ designId }: Props) {
       setLoading(false)
     })
   }, [workspaceId, designId])
+
+  // Load members from the linked folder for Max Length Text preview
+  useEffect(() => {
+    if (!workspaceId || !design?.folderId) return
+    getMembersInFolder(workspaceId, design.folderId).then(setMembers).catch(() => {})
+  }, [workspaceId, design?.folderId])
 
   const activeDoc = activeSide === 'front' ? frontDoc : backDoc
   const setActiveDoc = activeSide === 'front' ? setFrontDoc : setBackDoc
@@ -339,6 +350,8 @@ export function CardDesigner({ designId }: Props) {
             selectedElementId={selectedElementId}
             onSelectElement={setSelectedElementId}
             onUpdateElement={handleUpdateElement}
+            maxLengthPreviewIds={maxLengthPreviewIds}
+            members={members}
           />
         </div>
 
@@ -352,6 +365,15 @@ export function CardDesigner({ designId }: Props) {
           onReorderElement={handleReorderElement}
           tableColumns={linkedFolder?.tableColumns}
           tableColumnRoles={linkedFolder?.tableColumnRoles}
+          maxLengthPreviewIds={maxLengthPreviewIds}
+          onToggleMaxLengthPreview={(id) =>
+            setMaxLengthPreviewIds((prev) => {
+              const next = new Set(prev)
+              if (next.has(id)) next.delete(id)
+              else next.add(id)
+              return next
+            })
+          }
         />
       </div>
     </div>

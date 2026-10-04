@@ -43,6 +43,10 @@ interface Props {
   tableColumns?: string[]
   /** Per-column role metadata */
   tableColumnRoles?: Record<string, ColumnRoles>
+  /** Designer-only: element IDs with Max Length Text preview enabled */
+  maxLengthPreviewIds?: Set<string>
+  /** Designer-only: toggle Max Length Text for an element */
+  onToggleMaxLengthPreview?: (id: string) => void
 }
 
 type RightTab = 'customize' | 'layers'
@@ -74,6 +78,8 @@ export function RightPanel({
   onReorderElement,
   tableColumns,
   tableColumnRoles,
+  maxLengthPreviewIds,
+  onToggleMaxLengthPreview,
 }: Props) {
   const [activeTab, setActiveTab] = useState<RightTab>('customize')
   const [radiusLocked, setRadiusLocked] = useState(true)
@@ -278,6 +284,19 @@ export function RightPanel({
                           <label className="text-[10px] text-muted-foreground">Label Prefix</label>
                           <Input value={(el.props.label as string) ?? ''} className="h-7 text-xs"
                             placeholder="e.g. ID: " onChange={(e) => updateProp('label', e.target.value)} />
+                        </div>
+                        {/* Max Length Text — Designer-only preview toggle */}
+                        <div className="flex items-center gap-1.5 py-0.5">
+                          <input
+                            type="checkbox"
+                            id="maxLengthPreview"
+                            checked={maxLengthPreviewIds?.has(el.id) ?? false}
+                            onChange={() => onToggleMaxLengthPreview?.(el.id)}
+                            className="size-3.5 accent-primary rounded"
+                          />
+                          <label htmlFor="maxLengthPreview" className="text-[10px] text-muted-foreground cursor-pointer select-none">
+                            Max Length Text
+                          </label>
                         </div>
                       </>
                     )}
