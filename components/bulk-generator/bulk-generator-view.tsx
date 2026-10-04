@@ -371,14 +371,18 @@ export function BulkGeneratorView() {
               Regenerate
             </Button>
           )}
-          {cards.length > 0 && selectedDesign && (
+          {cards.length > 0 && selectedDesign && (() => {
+            // Only pass members that have generated cards (for vector PDF)
+            const generatedMemberIds = new Set(cards.map(c => c.memberId))
+            const generatedMembers = filtered.filter(m => generatedMemberIds.has(m.id))
+            return (
             <PrintLayoutDialog
               cards={cards}
               cardOrientation={selectedDesign.cardConfiguration.orientation}
               cardWidthMm={selectedDesign.cardConfiguration.cardWidthMm}
               cardHeightMm={selectedDesign.cardConfiguration.cardHeightMm}
               design={selectedDesign}
-              members={filtered}
+              members={generatedMembers}
               trigger={
                 <Button variant="outline" size="sm">
                   <PrinterIcon data-icon="inline-start" />
@@ -386,7 +390,8 @@ export function BulkGeneratorView() {
                 </Button>
               }
             />
-          )}
+            )
+          })()}
           <Button variant="outline" size="sm" onClick={handleExportSelected} disabled={selectedIds.size === 0 || generating}>
             <DownloadIcon data-icon="inline-start" />
             Export Selected ({selectedIds.size})

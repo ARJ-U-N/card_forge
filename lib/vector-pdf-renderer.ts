@@ -25,6 +25,7 @@ import {
   type CardSlot,
   type PageLayout,
   type PrintPage,
+  type LayoutMode,
 } from '@/lib/print-layout'
 import type { RenderedCard } from '@/lib/card-renderer'
 
@@ -1198,10 +1199,57 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
 
   const isRotated90 = config.layoutMode === 'rotated-90'
 
-  // For rotated-90: use a landscape config so calculateLayout produces
-  // normal landscape slots (no W↔H swap, no rotateCards flag).
+  // For rotated-90: convert to an equivalent landscape config so
+  // calculateLayout produces normal landscape slots (no card-dim swap,
+  // no rotateCards flag).  Preserve the user's actual layout choice:
+  //   autoLayout=true  → layoutMode 'automatic' (landscape auto-fit)
+  //   autoLayout=false → layoutMode 'custom'    (user's rows/cols on landscape)
+  //
+  // Because the finished landscape pages receive a page-level /Rotate 90
+  // (90° clockwise display rotation), all spatial settings must be
+  // pre-transformed so they map to the correct visual axes after rotation:
+  //
+  //   Landscape axis        After /Rotate 90 appears as
+  //   ──────────────────    ────────────────────────────
+  //   horizontal (width)  → vertical
+  //   vertical   (height) → horizontal
+  //   left edge           → top edge
+  //   right edge          → bottom edge
+  //   top edge            → right edge
+  //   bottom edge         → left edge
+  //
+  // Adjustment rotation is NOT compensated because /Rotate 90 rotates
+  // both content and page edges equally, preserving their relative angle.
   const effectiveConfig: PrintConfig = isRotated90
-    ? { ...config, layoutMode: 'automatic', orientation: 'landscape' as const }
+    ? {
+        ...config,
+        layoutMode: (config.autoLayout ? 'automatic' : 'custom') as LayoutMode,
+        orientation: 'landscape' as const,
+        // Swap gaps: user's H gap → landscape V (appears visual H after /Rotate)
+        gutterH: config.gutterV,
+        gutterV: config.gutterH,
+        // Swap rows/cols: user's columns → landscape rows (appears visual cols after /Rotate)
+        rows: config.columns,
+        columns: config.rows,
+        // Rotate margins: landscape-left → visual-top after /Rotate 90
+        margins: {
+          left: config.margins.top,
+          right: config.margins.bottom,
+          top: config.margins.right,
+          bottom: config.margins.left,
+        },
+        // Rotate offsets: landscape +X → visual +Y, landscape +Y → visual −X
+        frontAdjustment: {
+          offsetX: config.frontAdjustment.offsetY,
+          offsetY: -config.frontAdjustment.offsetX,
+          rotation: config.frontAdjustment.rotation,
+        },
+        backAdjustment: {
+          offsetX: config.backAdjustment.offsetY,
+          offsetY: -config.backAdjustment.offsetX,
+          rotation: config.backAdjustment.rotation,
+        },
+      }
     : config
 
   const layout = calculateLayout(effectiveConfig, cardConfig.orientation, customCardMm)
