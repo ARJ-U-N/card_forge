@@ -12,7 +12,7 @@ export type PaperSize = 'a3' | 'a4' | 'letter' | 'legal'
 export type PaperOrientation = 'portrait' | 'landscape'
 export type PrintMode = 'front-only' | 'back-only' | 'duplex' | 'side-by-side'
 export type LayoutMode = 'automatic' | 'custom' | 'rotated-90'
-export type DuplexBackArrangement = 'normal' | 'mirror-h' | 'mirror-v' | 'rotate-180'
+export type DuplexBackArrangement = 'normal' | 'mirror-h' | 'mirror-v' | 'rotate-180' | 'rotate-page-180'
 
 export interface SideAdjustment {
   /** X offset in mm (positive = shift right) */
@@ -221,7 +221,9 @@ function computeBackSlots(
     const col = idx % cols
     switch (arrangement) {
       case 'normal':
-        // Same order as front — no transformation
+      case 'rotate-page-180':
+        // Same order as front — no slot transformation
+        // ('rotate-page-180' applies a whole-page rotation instead)
         return slots[idx]
       case 'mirror-h': {
         // Columns reversed, rows same
@@ -370,6 +372,24 @@ export async function generatePDF(
       uniqueUrls.add(card.backDataUrl)
     }
     await Promise.all(Array.from(uniqueUrls).map((url) => rotateImageData90(url)))
+  }
+
+  // ── Page-level /Rotate 180 for 'rotate-page-180' back arrangement ──────
+  // Uses the same proven mechanism as rotated-90 mode: inject /Rotate into
+  // the PDF page dictionary via the putPage event.  Only back pages receive
+  // the rotation; front pages are unaffected.
+  if (config.duplexBack === 'rotate-page-180') {
+    const backPageNumbers = new Set<number>()
+    pages.forEach((p, i) => { if (p.side === 'back') backPageNumbers.add(i + 1) }) // 1-indexed
+
+    let putPageCounter = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      putPageCounter++
+      if (backPageNumbers.has(putPageCounter)) {
+        this.internal.write('/Rotate 180')
+      }
+    })
   }
 
   for (let pi = 0; pi < pages.length; pi++) {

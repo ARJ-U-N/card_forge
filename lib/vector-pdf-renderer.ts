@@ -1079,6 +1079,9 @@ function computeBackSlots(
     const col = idx % cols
     switch (arrangement) {
       case 'normal':
+      case 'rotate-page-180':
+        // Same order as front — no slot transformation
+        // ('rotate-page-180' applies a whole-page rotation instead)
         return slots[idx]
       case 'mirror-h': {
         const mirroredCol = cols - 1 - col
@@ -1281,6 +1284,28 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
       this.internal.write('/Rotate 90')
+    })
+  }
+
+  // ── Page-level /Rotate 180 for 'rotate-page-180' back arrangement ──────
+  // Same proven mechanism as rotated-90: inject /Rotate into the page
+  // dictionary.  Only back pages receive the rotation.
+  // NOTE: if rotated-90 is also active, back pages already get /Rotate 90
+  // from the handler above.  Adding /Rotate 180 here means the PDF page
+  // dictionary will contain both; the last one wins in most PDF viewers,
+  // so we use a combined value (270 = 90 + 180) when both are active.
+  if (config.duplexBack === 'rotate-page-180') {
+    const backPageNumbers = new Set<number>()
+    pages.forEach((p, i) => { if (p.side === 'back') backPageNumbers.add(i + 1) }) // 1-indexed
+
+    let putPageCounter180 = 0
+    const rotateValue = isRotated90 ? 270 : 180
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      putPageCounter180++
+      if (backPageNumbers.has(putPageCounter180)) {
+        this.internal.write(`/Rotate ${rotateValue}`)
+      }
     })
   }
 

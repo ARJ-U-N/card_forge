@@ -454,11 +454,18 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
                       <SelectItem value="mirror-h">Mirror Horizontal</SelectItem>
                       <SelectItem value="mirror-v">Mirror Vertical</SelectItem>
                       <SelectItem value="rotate-180">Rotate 180°</SelectItem>
+                      <SelectItem value="rotate-page-180">Rotate Back Page 180°</SelectItem>
                     </SelectContent>
                   </Select>
-                  <p className="text-[9px] text-muted-foreground">
-                    Match your printer’s duplex flip direction.
-                  </p>
+                  {config.duplexBack === 'rotate-page-180' ? (
+                    <p className="text-[9px] text-muted-foreground">
+                      Rotates the entire back page 180°. Use after physically rotating the printed front sheet 180° before printing the back.
+                    </p>
+                  ) : (
+                    <p className="text-[9px] text-muted-foreground">
+                      Match your printer’s duplex flip direction.
+                    </p>
+                  )}
                 </Section>
               </>
             )}
@@ -641,7 +648,14 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
                     Page {currentPage} — {currentPageData.side === 'back' ? 'Back Side' : 'Front Side'}
                   </div>
 
-                  {/* Card slots */}
+                  {/* Card slots — wrapped for page-level 180° rotation preview */}
+                  <div style={{
+                    width: '100%',
+                    height: '100%',
+                    ...(currentPageData.side === 'back' && config.duplexBack === 'rotate-page-180' ? {
+                      transform: 'rotate(180deg)',
+                    } : {}),
+                  }}>
                   {currentPageData.cards.map(({ slot, card }, idx) => {
                     const adj = currentPageData.side === 'back' ? config.backAdjustment : config.frontAdjustment
                     const adjX = adj.offsetX * previewScale
@@ -731,6 +745,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
                     </div>
                     )
                   })}
+                  </div>  {/* end page-rotation wrapper */}
                 </div>
               ) : (
                 <div className="text-sm text-muted-foreground">No cards to preview</div>
