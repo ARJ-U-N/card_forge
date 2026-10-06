@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import {
   ArrowDownIcon,
   ArrowUpIcon,
@@ -11,6 +11,7 @@ import {
   LayersIcon,
   Link2Icon,
   LockIcon,
+  MaximizeIcon,
   SlidersHorizontalIcon,
   Trash2Icon,
   Unlink2Icon,
@@ -28,8 +29,19 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
-import type { CanvasElement, CardDocument, ColumnRoles } from '@/lib/models/types'
+import type { CanvasElement, CardConfiguration, CardDocument, ColumnRoles } from '@/lib/models/types'
 import { DYNAMIC_FIELDS } from './left-panel'
+import { visualCardSize } from '../canvas/card-canvas'
+
+/** Check if an image element is a static (non-dynamic, non-QR, non-barcode) image */
+function isStaticImage(el: CanvasElement): boolean {
+  return (
+    el.type === 'image' &&
+    !el.props.dynamic &&
+    !el.props.qrCode &&
+    !el.props.barcode
+  )
+}
 
 interface Props {
   activeDoc: CardDocument
@@ -39,6 +51,8 @@ interface Props {
   onDeleteElement: (id: string) => void
   onDuplicateElement: (id: string) => void
   onReorderElement: (id: string, direction: 'up' | 'down') => void
+  /** Current card configuration (needed for Stretch to Fit) */
+  cardConfig: CardConfiguration
   /** Table columns from the linked folder (if any) */
   tableColumns?: string[]
   /** Per-column role metadata */
@@ -76,6 +90,7 @@ export function RightPanel({
   onDeleteElement,
   onDuplicateElement,
   onReorderElement,
+  cardConfig,
   tableColumns,
   tableColumnRoles,
   maxLengthPreviewIds,
@@ -96,6 +111,28 @@ export function RightPanel({
     if (!el) return
     onUpdateElement(el.id, { props: { ...el.props, [key]: value } })
   }
+
+  // ── Stretch to Fit Card handler ──────────────────────────────────────
+  const handleStretchToFit = useCallback(
+    (enable: boolean) => {
+      if (!el || !isStaticImage(el)) return
+      if (enable) {
+        const { w: cardW, h: cardH } = visualCardSize(cardConfig)
+        onUpdateElement(el.id, {
+          x: 0,
+          y: 0,
+          width: cardW,
+          height: cardH,
+          props: { ...el.props, stretchToFit: true },
+        })
+      } else {
+        onUpdateElement(el.id, {
+          props: { ...el.props, stretchToFit: false },
+        })
+      }
+    },
+    [el, cardConfig, onUpdateElement],
+  )
 
   // ── File picker for image replace ────────────────────────────────────
   const handleReplace = () => {
@@ -530,6 +567,31 @@ export function RightPanel({
                     <Button variant="outline" size="xs" onClick={handleReplace} className="w-full">
                       Browse New Image
                     </Button>
+
+                    {/* Stretch to Fit Card — static images only */}
+                    {isStaticImage(el) && (
+                      <>
+                        <Separator />
+                        <div className="flex items-center gap-1.5 py-0.5">
+                          <input
+                            type="checkbox"
+                            id="stretchToFit"
+                            checked={!!el.props.stretchToFit}
+                            onChange={(e) => handleStretchToFit(e.target.checked)}
+                            className="size-3.5 accent-primary rounded"
+                          />
+                          <label htmlFor="stretchToFit" className="text-[10px] text-muted-foreground cursor-pointer select-none flex items-center gap-1">
+                            <MaximizeIcon className="size-3" />
+                            Stretch to Fit Card
+                          </label>
+                        </div>
+                        {!!el.props.stretchToFit && (
+                          <p className="text-[9px] text-emerald-600 -mt-1">
+                            Image fills the entire card ({cardConfig.cardWidthMm ?? 85.6} × {cardConfig.cardHeightMm ?? 54} mm)
+                          </p>
+                        )}
+                      </>
+                    )}
 
                     {/* Shape */}
                     <div className="flex flex-col gap-0.5">

@@ -15,15 +15,29 @@ const DEFAULT_CARD_W = 324
 const DEFAULT_CARD_H = 204
 
 // Consistent pixels-per-mm scale factor (based on CR-80: 324px / 85.6mm)
-const PX_PER_MM = DEFAULT_CARD_W / 85.6
+export const PX_PER_MM = DEFAULT_CARD_W / 85.6
 
-/** Derive canvas pixel dimensions from card config (mm → px) */
+/** Derive canvas pixel dimensions from card config (mm → px), before orientation */
 function cardPixelSize(config: CardConfiguration): { w: number; h: number } {
   const wmm = config.cardWidthMm ?? 85.6
   const hmm = config.cardHeightMm ?? 54
   return {
     w: Math.round(wmm * PX_PER_MM),
     h: Math.round(hmm * PX_PER_MM),
+  }
+}
+
+/**
+ * Compute the visual card dimensions in pixels, applying orientation swap.
+ * This is the single source of truth for the actual canvas coordinate space.
+ * Use this everywhere that needs to know the rendered card width/height.
+ */
+export function visualCardSize(config: CardConfiguration): { w: number; h: number } {
+  const { w: baseW, h: baseH } = cardPixelSize(config)
+  const isVertical = config.orientation === 'vertical'
+  return {
+    w: isVertical ? baseH : baseW,
+    h: isVertical ? baseW : baseH,
   }
 }
 

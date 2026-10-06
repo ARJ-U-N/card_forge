@@ -29,7 +29,7 @@ import type {
 } from '@/lib/models/types'
 import { LeftPanel } from './panels/left-panel'
 import { RightPanel } from './panels/right-panel'
-import { CardCanvas } from './canvas/card-canvas'
+import { CardCanvas, visualCardSize } from './canvas/card-canvas'
 import { getMembersInFolder } from '@/lib/firebase/member-repository'
 
 interface Props {
@@ -234,6 +234,39 @@ export function CardDesigner({ designId }: Props) {
     [activeSide],
   )
 
+  // ── Stretch to Fit: auto-resize stretched elements when card dimensions change ──
+  const prevCardDimsRef = useRef<{ w: number; h: number } | null>(null)
+  useEffect(() => {
+    if (!config) return
+    const { w: cardW, h: cardH } = visualCardSize(config)
+    const prev = prevCardDimsRef.current
+    prevCardDimsRef.current = { w: cardW, h: cardH }
+    // Skip the initial render (no previous dims to compare)
+    if (!prev) return
+    // Only act if dimensions actually changed
+    if (prev.w === cardW && prev.h === cardH) return
+
+    const updateStretchedElements = (doc: CardDocument): CardDocument => {
+      let changed = false
+      const elements = doc.elements.map((el) => {
+        if (
+          el.type === 'image' &&
+          !el.props.dynamic &&
+          !el.props.qrCode &&
+          !el.props.barcode &&
+          el.props.stretchToFit
+        ) {
+          changed = true
+          return { ...el, x: 0, y: 0, width: cardW, height: cardH }
+        }
+        return el
+      })
+      return changed ? { ...doc, elements } : doc
+    }
+    setFrontDoc((prev) => updateStretchedElements(prev))
+    setBackDoc((prev) => updateStretchedElements(prev))
+  }, [config?.cardWidthMm, config?.cardHeightMm, config?.orientation])
+
   // Property-panel variant: debounced undo snapshot so rapid edits
   // (typing numbers, dragging color picker) create one undo entry.
   const handleUpdateElementWithUndo = useCallback(
@@ -244,9 +277,28 @@ export function CardDesigner({ designId }: Props) {
       }
       if (panelTimerRef.current) clearTimeout(panelTimerRef.current)
       panelTimerRef.current = setTimeout(() => { panelSnapshotTakenRef.current = false }, 500)
+
+      // ── Stretch to Fit auto-disable: if the user manually changes
+      // x/y/width/height on an element that has stretchToFit, disable it
+      // to avoid confusing snapping loops. We skip this check when the
+      // update itself contains stretchToFit (i.e. it's the toggle handler).
+      const hasPositionChange = 'x' in updates || 'y' in updates || 'width' in updates || 'height' in updates
+      const isStretchToggle = updates.props && 'stretchToFit' in (updates.props as Record<string, unknown>)
+      if (hasPositionChange && !isStretchToggle) {
+        const currentDoc = activeSide === 'front' ? frontDocRef.current : backDocRef.current
+        const el = currentDoc.elements.find((e) => e.id === id)
+        if (el && el.props.stretchToFit) {
+          // Merge stretchToFit:false into the update
+          updates = {
+            ...updates,
+            props: { ...(el.props), ...(updates.props || {}), stretchToFit: false },
+          }
+        }
+      }
+
       handleUpdateElement(id, updates)
     },
-    [handleUpdateElement, pushUndo],
+    [handleUpdateElement, pushUndo, activeSide],
   )
 
   const handleAddElement = useCallback(
@@ -500,6 +552,7 @@ export function CardDesigner({ designId }: Props) {
           onDeleteElement={handleDeleteElement}
           onDuplicateElement={handleDuplicateElement}
           onReorderElement={handleReorderElement}
+          cardConfig={config}
           tableColumns={linkedFolder?.tableColumns}
           tableColumnRoles={linkedFolder?.tableColumnRoles}
           maxLengthPreviewIds={maxLengthPreviewIds}
