@@ -561,6 +561,18 @@ export function RightPanel({
                             </SelectContent>
                           </Select>
                         </div>
+                        <div className="flex items-center gap-1.5 pt-1">
+                          <input
+                            type="checkbox"
+                            id="barcodeNeedName"
+                            checked={!!el.props.needName}
+                            onChange={(e) => updateProp('needName', e.target.checked)}
+                            className="size-3.5 rounded border-border accent-primary"
+                          />
+                          <label htmlFor="barcodeNeedName" className="text-[10px] text-muted-foreground select-none cursor-pointer">
+                            Need Name
+                          </label>
+                        </div>
                       </>
                     )}
 

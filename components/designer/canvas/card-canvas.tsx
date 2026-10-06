@@ -392,6 +392,7 @@ export function CardCanvas({
                 fieldName={(el.props.fieldName as string) ?? 'employeeId'}
                 format={(el.props.barcodeFormat as string) ?? 'CODE128'}
                 width={el.width} height={el.height}
+                needName={!!el.props.needName}
               />
             ) : el.props.src && !el.props.placeholder ? (
               <img src={el.props.src as string} alt="" className="size-full object-cover" draggable={false}
@@ -565,7 +566,7 @@ function QRPreview({ fieldName, width, height }: { fieldName: string; width: num
 }
 
 // ── Barcode Preview ────────────────────────────────────────────────────
-function BarcodePreview({ fieldName, format, width, height }: { fieldName: string; format: string; width: number; height: number }) {
+function BarcodePreview({ fieldName, format, width, height, needName }: { fieldName: string; format: string; width: number; height: number; needName: boolean }) {
   const svgRef = useRef<SVGSVGElement>(null)
 
   useEffect(() => {
@@ -575,9 +576,8 @@ function BarcodePreview({ fieldName, format, width, height }: { fieldName: strin
         JsBarcode.default(svgRef.current, `{${fieldName}}`, {
           format: format as string,
           width: 1.5,
-          height: Math.max(20, height - 16),
-          displayValue: true,
-          fontSize: 8,
+          height: Math.max(20, needName ? height - 24 : height - 16),
+          displayValue: false,
           margin: 2,
           background: '#ffffff',
         })
@@ -585,7 +585,16 @@ function BarcodePreview({ fieldName, format, width, height }: { fieldName: strin
         // Invalid format fallback
       }
     })
-  }, [fieldName, format, width, height])
+  }, [fieldName, format, width, height, needName])
 
-  return <svg ref={svgRef} className="size-full" />
+  return (
+    <div className="flex size-full flex-col items-center bg-white">
+      <svg ref={svgRef} className={needName ? 'flex-1' : 'size-full'} />
+      {needName && (
+        <div className="w-full text-center text-[8px] leading-tight text-black pb-0.5 truncate px-1">
+          {fieldName}
+        </div>
+      )}
+    </div>
+  )
 }

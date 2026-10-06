@@ -25,7 +25,7 @@ async function ensureCustomFont(el: CanvasElement): Promise<void> {
   try {
     const font = new FontFace(fontFamily, `url(${fontData})`)
     const loaded = await font.load()
-    ;(document.fonts as FontFaceSet).add(loaded)
+      ; (document.fonts as FontFaceSet).add(loaded)
     _loadedFonts.add(fontFamily)
   } catch {
     // Font load failed — fall back to sans-serif
@@ -138,6 +138,7 @@ async function generateBarcodeDataUrl(
   format: string,
   width: number,
   height: number,
+  needName = false,
 ): Promise<string> {
   try {
     const JsBarcode = await import('jsbarcode')
@@ -145,7 +146,7 @@ async function generateBarcodeDataUrl(
     JsBarcode.default(canvas, text || '0000', {
       format,
       width: 1.5,
-      height: Math.max(20, height - 10),
+      height: Math.max(20, needName ? height - 18 : height - 10),
       displayValue: false,
       margin: 2,
     })
@@ -299,7 +300,7 @@ async function renderSide(
           const fieldName = (el.props.fieldName as string) ?? 'employeeId'
           const bcText = resolveDynamicText(member, fieldName)
           const format = (el.props.barcodeFormat as string) ?? 'CODE128'
-          imgSrc = await generateBarcodeDataUrl(bcText, format, el.width, el.height)
+          imgSrc = await generateBarcodeDataUrl(bcText, format, el.width, el.height, !!el.props.needName)
         } else if (el.props.dynamic) {
           const fieldName = (el.props.fieldName as string) ?? 'profileImage'
           imgSrc = resolveDynamicImageSrc(member, fieldName)
@@ -360,6 +361,23 @@ async function renderSide(
             ctx.restore()
           }
         }
+
+        // Draw column-heading label below barcode when needName is ON
+        // el.props.fieldName IS the actual table column heading for table-based
+        // designs (e.g. "Blood Group", "Emergency Contact").  No static mapping
+        // needed — the column heading is the fieldName itself.
+        if (el.props.barcode && el.props.needName) {
+          const label = (el.props.fieldName as string) ?? ''
+          if (label) {
+            ctx.save()
+            ctx.fillStyle = '#000000'
+            ctx.font = '10px sans-serif'
+            ctx.textAlign = 'center'
+            ctx.textBaseline = 'bottom'
+            ctx.fillText(label, el.x + el.width / 2, el.y + el.height - 1)
+            ctx.restore()
+          }
+        }
         break
       }
 
@@ -370,7 +388,7 @@ async function renderSide(
         const strokeW = (el.props.strokeWidth as number) ?? 0
         const bR = shape === 'circle' ? Math.min(el.width, el.height) / 2
           : shape === 'rounded-rect' ? 12
-          : (el.props.borderRadius as number) ?? 0
+            : (el.props.borderRadius as number) ?? 0
 
         if (shape === 'line') {
           ctx.strokeStyle = fill

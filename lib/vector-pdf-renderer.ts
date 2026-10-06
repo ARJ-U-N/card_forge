@@ -701,7 +701,8 @@ async function renderVectorImage(
   if (el.props.barcode) {
     const fieldName = (el.props.fieldName as string) ?? 'employeeId'
     const bcText = resolveDynamicText(member, fieldName)
-    await renderVectorBarcode(pdf, bcText, xMm, yMm, wMm, hMm)
+    // fieldName IS the table column heading for table-based designs
+    await renderVectorBarcode(pdf, bcText, xMm, yMm, wMm, hMm, !!el.props.needName, fieldName)
     return
   }
 
@@ -849,18 +850,34 @@ async function renderVectorBarcode(
   yMm: number,
   wMm: number,
   hMm: number,
+  needName = false,
+  label = '',
 ) {
+  // Reserve space for the text label when needName is enabled
+  const labelHeightMm = needName ? 3.5 : 0
+  const barAreaH = hMm - labelHeightMm
+
   // White background
   pdf.setFillColor(255, 255, 255)
   pdf.rect(xMm, yMm, wMm, hMm, 'F')
 
-  const bars = await getCode128Bars(text, wMm, hMm)
+  const bars = await getCode128Bars(text, wMm, barAreaH)
   if (bars.length === 0) return
 
   // Draw each bar as a vector rectangle
   pdf.setFillColor(0, 0, 0)
   for (const bar of bars) {
     pdf.rect(xMm + bar.x, yMm, bar.width, bar.height, 'F')
+  }
+
+  // Draw column heading label below bars when needName is enabled
+  // label is the actual table column heading (e.g. "Blood Group"),
+  // NOT the encoded barcode value.
+  if (needName && label) {
+    pdf.setFontSize(7)
+    pdf.setTextColor(0, 0, 0)
+    const labelY = yMm + barAreaH + labelHeightMm * 0.8
+    pdf.text(label, xMm + wMm / 2, labelY, { align: 'center' })
   }
 }
 
