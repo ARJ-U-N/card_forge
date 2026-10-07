@@ -65,6 +65,9 @@ export function CardDesigner({ designId }: Props) {
   const [members, setMembers] = useState<Member[]>([])
   const [maxLengthPreviewIds, setMaxLengthPreviewIds] = useState<Set<string>>(new Set())
 
+  // ── Linked Width/Height — editing aid for circle dynamic images (never persisted) ──
+  const [sizeLocked, setSizeLocked] = useState(true)
+
   // ── Undo / Redo — Designer-session-only (never persisted) ───────────────
   const frontDocRef = useRef(frontDoc)
   const backDocRef = useRef(backDoc)
@@ -541,6 +544,7 @@ export function CardDesigner({ designId }: Props) {
             onBeforeChange={pushUndo}
             maxLengthPreviewIds={maxLengthPreviewIds}
             members={members}
+            sizeLocked={sizeLocked}
           />
         </div>
 
@@ -564,6 +568,8 @@ export function CardDesigner({ designId }: Props) {
               return next
             })
           }
+          sizeLocked={sizeLocked}
+          onSizeLockChange={setSizeLocked}
         />
       </div>
     </div>

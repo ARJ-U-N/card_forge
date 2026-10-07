@@ -99,6 +99,8 @@ interface DragState {
   elY: number
   elW: number
   elH: number
+  /** True when this element is a dynamic member image with circle shape */
+  isCircleDynamic: boolean
 }
 
 interface Props {
@@ -114,6 +116,8 @@ interface Props {
   maxLengthPreviewIds?: Set<string>
   /** Designer-only: member data for Max Length Text lookup */
   members?: Member[]
+  /** Whether the Width/Height linked constraint is ON (for circle dynamic images) */
+  sizeLocked?: boolean
 }
 
 export function CardCanvas({
@@ -126,6 +130,7 @@ export function CardCanvas({
   onBeforeChange,
   maxLengthPreviewIds,
   members,
+  sizeLocked,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -146,44 +151,99 @@ export function CardCanvas({
     e.preventDefault()
     onBeforeChange?.()
     onSelectElement(el.id)
-    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height })
+    const isCD = el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
+    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD })
   }
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!drag) return
     const dx = (e.clientX - drag.startMX) / scale
     const dy = (e.clientY - drag.startMY) / scale
+    // Whether to constrain to 1:1 for this drag
+    const sq = !!(sizeLocked && drag.isCircleDynamic)
 
     switch (drag.mode) {
       case 'move':
         onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), y: Math.round(drag.elY + dy) })
         break
-      case 'resize-se':
-        onUpdateElement(drag.id, { width: Math.max(10, Math.round(drag.elW + dx)), height: Math.max(10, Math.round(drag.elH + dy)) })
+
+      // ── Corner handles ─────────────────────────────────────────
+      case 'resize-se': {
+        let newW = Math.max(10, Math.round(drag.elW + dx))
+        let newH = Math.max(10, Math.round(drag.elH + dy))
+        if (sq) { const s = Math.max(newW, newH); newW = s; newH = s }
+        // Top-left corner stays anchored (no x/y change)
+        onUpdateElement(drag.id, { width: newW, height: newH })
         break
-      case 'resize-e':
-        onUpdateElement(drag.id, { width: Math.max(10, Math.round(drag.elW + dx)) })
+      }
+      case 'resize-nw': {
+        let newW = Math.max(10, Math.round(drag.elW - dx))
+        let newH = Math.max(10, Math.round(drag.elH - dy))
+        if (sq) {
+          const s = Math.max(newW, newH)
+          // Bottom-right corner stays anchored
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - s), y: Math.round(drag.elY + drag.elH - s), width: s, height: s })
+        } else {
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), y: Math.round(drag.elY + dy), width: newW, height: newH })
+        }
         break
-      case 'resize-s':
-        onUpdateElement(drag.id, { height: Math.max(10, Math.round(drag.elH + dy)) })
+      }
+      case 'resize-ne': {
+        let newW = Math.max(10, Math.round(drag.elW + dx))
+        let newH = Math.max(10, Math.round(drag.elH - dy))
+        if (sq) {
+          const s = Math.max(newW, newH)
+          // Bottom-left corner stays anchored
+          onUpdateElement(drag.id, { y: Math.round(drag.elY + drag.elH - s), width: s, height: s })
+        } else {
+          onUpdateElement(drag.id, { y: Math.round(drag.elY + dy), width: newW, height: newH })
+        }
         break
-      case 'resize-w':
-        onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), width: Math.max(10, Math.round(drag.elW - dx)) })
+      }
+      case 'resize-sw': {
+        let newW = Math.max(10, Math.round(drag.elW - dx))
+        let newH = Math.max(10, Math.round(drag.elH + dy))
+        if (sq) {
+          const s = Math.max(newW, newH)
+          // Top-right corner stays anchored
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - s), width: s, height: s })
+        } else {
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), width: newW, height: newH })
+        }
         break
-      case 'resize-n':
-        onUpdateElement(drag.id, { y: Math.round(drag.elY + dy), height: Math.max(10, Math.round(drag.elH - dy)) })
+      }
+
+      // ── Side handles ────────────────────────────────────────────
+      case 'resize-e': {
+        const newW = Math.max(10, Math.round(drag.elW + dx))
+        onUpdateElement(drag.id, sq ? { width: newW, height: newW } : { width: newW })
         break
-      case 'resize-nw':
-        onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), y: Math.round(drag.elY + dy), width: Math.max(10, Math.round(drag.elW - dx)), height: Math.max(10, Math.round(drag.elH - dy)) })
+      }
+      case 'resize-s': {
+        const newH = Math.max(10, Math.round(drag.elH + dy))
+        onUpdateElement(drag.id, sq ? { width: newH, height: newH } : { height: newH })
         break
-      case 'resize-ne':
-        onUpdateElement(drag.id, { y: Math.round(drag.elY + dy), width: Math.max(10, Math.round(drag.elW + dx)), height: Math.max(10, Math.round(drag.elH - dy)) })
+      }
+      case 'resize-w': {
+        const newW = Math.max(10, Math.round(drag.elW - dx))
+        if (sq) {
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - newW), width: newW, height: newW })
+        } else {
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), width: newW })
+        }
         break
-      case 'resize-sw':
-        onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), width: Math.max(10, Math.round(drag.elW - dx)), height: Math.max(10, Math.round(drag.elH + dy)) })
+      }
+      case 'resize-n': {
+        const newH = Math.max(10, Math.round(drag.elH - dy))
+        if (sq) {
+          onUpdateElement(drag.id, { y: Math.round(drag.elY + drag.elH - newH), width: newH, height: newH })
+        } else {
+          onUpdateElement(drag.id, { y: Math.round(drag.elY + dy), height: newH })
+        }
         break
+      }
     }
-  }, [drag, scale, onUpdateElement])
+  }, [drag, scale, sizeLocked, onUpdateElement])
 
   const handleMouseUp = useCallback(() => setDrag(null), [])
 

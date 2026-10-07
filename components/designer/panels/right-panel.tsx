@@ -61,6 +61,10 @@ interface Props {
   maxLengthPreviewIds?: Set<string>
   /** Designer-only: toggle Max Length Text for an element */
   onToggleMaxLengthPreview?: (id: string) => void
+  /** Whether Width/Height are linked for circle dynamic images */
+  sizeLocked: boolean
+  /** Callback to toggle sizeLocked */
+  onSizeLockChange: (locked: boolean) => void
 }
 
 type RightTab = 'customize' | 'layers'
@@ -95,9 +99,13 @@ export function RightPanel({
   tableColumnRoles,
   maxLengthPreviewIds,
   onToggleMaxLengthPreview,
+  sizeLocked,
+  onSizeLockChange,
 }: Props) {
   const [activeTab, setActiveTab] = useState<RightTab>('customize')
   const [radiusLocked, setRadiusLocked] = useState(true)
+  // Track which dimension was last edited (for equalize-on-link-ON)
+  const lastEditedDimRef = useRef<'width' | 'height'>('width')
   const [customFonts, setCustomFonts] = useState<string[]>([])
   const fontInputRef = useRef<HTMLInputElement>(null)
 
@@ -110,6 +118,37 @@ export function RightPanel({
   const updateProp = (key: string, value: unknown) => {
     if (!el) return
     onUpdateElement(el.id, { props: { ...el.props, [key]: value } })
+  }
+
+  // Check if selected element is a dynamic member image with circle shape
+  const isCircleDynamic = el !== null && el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
+
+  // Handle width/height changes with linked mode for circle images.
+  // A single onUpdateElement call sets both width and height atomically,
+  // preventing any recursive update loop.
+  const handleSizeChange = (dimension: 'width' | 'height', value: number) => {
+    if (!el) return
+    // Skip NaN from empty/partial input to avoid invalid element state
+    if (Number.isNaN(value)) return
+    lastEditedDimRef.current = dimension
+    if (sizeLocked && isCircleDynamic) {
+      // Atomic update: both dimensions set in one call — no loop
+      onUpdateElement(el.id, { width: value, height: value })
+    } else {
+      onUpdateElement(el.id, { [dimension]: value })
+    }
+  }
+
+  // When toggling size link ON, equalize width/height immediately
+  // using the last-edited dimension as the source value.
+  const handleSizeLockToggle = () => {
+    const next = !sizeLocked
+    onSizeLockChange(next)
+    if (next && el && isCircleDynamic && el.width !== el.height) {
+      // Use the last-edited dimension as the source for equalization
+      const s = lastEditedDimRef.current === 'height' ? el.height : el.width
+      onUpdateElement(el.id, { width: s, height: s })
+    }
   }
 
   // ── Stretch to Fit Card handler ──────────────────────────────────────
@@ -258,7 +297,7 @@ export function RightPanel({
                   Position & Size
                 </h4>
                 <div className="grid grid-cols-2 gap-2">
-                  {(['x', 'y', 'width', 'height'] as const).map((k) => (
+                  {(['x', 'y'] as const).map((k) => (
                     <div key={k} className="flex flex-col gap-0.5">
                       <label className="text-[10px] text-muted-foreground uppercase">{k}</label>
                       <Input type="number" value={Math.round(el[k])} className="h-7 text-xs"
@@ -266,6 +305,50 @@ export function RightPanel({
                     </div>
                   ))}
                 </div>
+                {isCircleDynamic ? (
+                  /* Width/Height with linked toggle for circle dynamic images */
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted-foreground uppercase">Size</label>
+                      <button
+                        type="button"
+                        onClick={handleSizeLockToggle}
+                        className={cn(
+                          'flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] transition-colors',
+                          sizeLocked
+                            ? 'bg-primary/10 text-primary'
+                            : 'bg-muted text-muted-foreground hover:text-foreground',
+                        )}
+                        title={sizeLocked ? 'Linked — width and height change together (circle)' : 'Unlinked — width and height are independent'}
+                      >
+                        {sizeLocked ? <Link2Icon className="size-3" /> : <Unlink2Icon className="size-3" />}
+                        {sizeLocked ? 'Linked' : 'Independent'}
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground uppercase">Width</label>
+                        <Input type="number" value={Math.round(el.width)} className="h-7 text-xs"
+                          onChange={(e) => handleSizeChange('width', Number(e.target.value))} />
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground uppercase">Height</label>
+                        <Input type="number" value={Math.round(el.height)} className="h-7 text-xs"
+                          onChange={(e) => handleSizeChange('height', Number(e.target.value))} />
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['width', 'height'] as const).map((k) => (
+                      <div key={k} className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground uppercase">{k}</label>
+                        <Input type="number" value={Math.round(el[k])} className="h-7 text-xs"
+                          onChange={(e) => onUpdateElement(el.id, { [k]: Number(e.target.value) })} />
+                      </div>
+                    ))}
+                  </div>
+                )}
                 <div className="flex flex-col gap-0.5">
                   <label className="text-[10px] text-muted-foreground uppercase">Rotation (°)</label>
                   <Input type="number" value={el.rotation} className="h-7 text-xs" min={-360} max={360}
