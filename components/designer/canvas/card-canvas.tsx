@@ -101,6 +101,8 @@ interface DragState {
   elH: number
   /** True when this element is a dynamic member image with circle shape */
   isCircleDynamic: boolean
+  /** True when this element is a QR code (always requires square geometry) */
+  isQR: boolean
 }
 
 interface Props {
@@ -152,7 +154,8 @@ export function CardCanvas({
     onBeforeChange?.()
     onSelectElement(el.id)
     const isCD = el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
-    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD })
+    const isQR = el.type === 'image' && !!el.props.qrCode
+    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD, isQR })
   }
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -160,7 +163,8 @@ export function CardCanvas({
     const dx = (e.clientX - drag.startMX) / scale
     const dy = (e.clientY - drag.startMY) / scale
     // Whether to constrain to 1:1 for this drag
-    const sq = !!(sizeLocked && drag.isCircleDynamic)
+    // QR codes always require square geometry; circle dynamic images require it when sizeLocked
+    const sq = drag.isQR || !!(sizeLocked && drag.isCircleDynamic)
 
     switch (drag.mode) {
       case 'move':

@@ -122,6 +122,8 @@ export function RightPanel({
 
   // Check if selected element is a dynamic member image with circle shape
   const isCircleDynamic = el !== null && el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
+  // QR codes always require square geometry
+  const isQR = el !== null && el.type === 'image' && !!el.props.qrCode
 
   // Handle width/height changes with linked mode for circle images.
   // A single onUpdateElement call sets both width and height atomically,
@@ -131,7 +133,8 @@ export function RightPanel({
     // Skip NaN from empty/partial input to avoid invalid element state
     if (Number.isNaN(value)) return
     lastEditedDimRef.current = dimension
-    if (sizeLocked && isCircleDynamic) {
+    // QR codes always require square; circle dynamic images require it when sizeLocked
+    if (isQR || (sizeLocked && isCircleDynamic)) {
       // Atomic update: both dimensions set in one call — no loop
       onUpdateElement(el.id, { width: value, height: value })
     } else {
@@ -324,6 +327,29 @@ export function RightPanel({
                         {sizeLocked ? <Link2Icon className="size-3" /> : <Unlink2Icon className="size-3" />}
                         {sizeLocked ? 'Linked' : 'Independent'}
                       </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground uppercase">Width</label>
+                        <Input type="number" value={Math.round(el.width)} className="h-7 text-xs"
+                          onChange={(e) => handleSizeChange('width', Number(e.target.value))} />
+                      </div>
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground uppercase">Height</label>
+                        <Input type="number" value={Math.round(el.height)} className="h-7 text-xs"
+                          onChange={(e) => handleSizeChange('height', Number(e.target.value))} />
+                      </div>
+                    </div>
+                  </div>
+                ) : isQR ? (
+                  /* QR Code: always-linked width/height (square geometry required) */
+                  <div className="flex flex-col gap-1">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-muted-foreground uppercase">Size</label>
+                      <span className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[9px] bg-primary/10 text-primary">
+                        <Link2Icon className="size-3" />
+                        Square
+                      </span>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div className="flex flex-col gap-0.5">
