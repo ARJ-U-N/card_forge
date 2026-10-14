@@ -267,7 +267,47 @@ async function renderSide(
         if (textAlign === 'center') textX = el.x + el.width / 2
         else if (textAlign === 'right') textX = el.x + el.width
 
-        ctx.fillText(resolvedText, textX, el.y, el.width)
+        // Word-wrap: split into lines that fit el.width, matching the
+        // Designer's CSS white-space:pre-wrap + overflow-wrap:anywhere.
+        const lineH = fontSize * 1.3
+        const wrapLines: string[] = []
+        const spaceW = ctx.measureText(' ').width
+        const words = resolvedText.split(/\s+/)
+        let curLine = ''
+        let curW = 0
+        for (const word of words) {
+          const wordW = ctx.measureText(word).width
+          const gap = curLine ? spaceW : 0
+          if (curLine && curW + gap + wordW > el.width) {
+            wrapLines.push(curLine)
+            curLine = ''
+            curW = 0
+          }
+          if (curLine) { curLine += ' '; curW += spaceW }
+          // If word fits, add it
+          if (wordW <= el.width - curW) {
+            curLine += word
+            curW += wordW
+          } else {
+            // Word wider than el.width — break char by char
+            for (const ch of word) {
+              const chW = ctx.measureText(ch).width
+              if (curW + chW > el.width && curW > 0) {
+                wrapLines.push(curLine)
+                curLine = ch
+                curW = chW
+              } else {
+                curLine += ch
+                curW += chW
+              }
+            }
+          }
+        }
+        if (curLine) wrapLines.push(curLine)
+
+        wrapLines.forEach((line, i) => {
+          ctx.fillText(line, textX, el.y + i * lineH)
+        })
         break
       }
 
@@ -348,7 +388,10 @@ async function renderSide(
           }
         }
 
-        // Draw image with clip
+        // Draw image with clip — when needName is ON, shrink the barcode
+        // area to leave room for the heading label below the bars.
+        const labelReserve = (el.props.barcode && el.props.needName) ? 16 : 0
+        const imgDrawH = el.height - labelReserve
         if (imgSrc) {
           const img = await loadImage(imgSrc)
           if (img) {
@@ -357,15 +400,11 @@ async function renderSide(
               applyClip()
               ctx.clip()
             }
-            ctx.drawImage(img, el.x, el.y, el.width, el.height)
+            ctx.drawImage(img, el.x, el.y, el.width, imgDrawH)
             ctx.restore()
           }
         }
 
-        // Draw column-heading label below barcode when needName is ON
-        // el.props.fieldName IS the actual table column heading for table-based
-        // designs (e.g. "Blood Group", "Emergency Contact").  No static mapping
-        // needed — the column heading is the fieldName itself.
         if (el.props.barcode && el.props.needName) {
           const label = (el.props.fieldName as string) ?? ''
           if (label) {
@@ -373,8 +412,9 @@ async function renderSide(
             ctx.fillStyle = '#000000'
             ctx.font = '10px sans-serif'
             ctx.textAlign = 'center'
-            ctx.textBaseline = 'bottom'
-            ctx.fillText(label, el.x + el.width / 2, el.y + el.height - 1)
+            ctx.textBaseline = 'top'
+            // Draw the heading label in the reserved area below the bars
+            ctx.fillText(label, el.x + el.width / 2, el.y + imgDrawH + 2)
             ctx.restore()
           }
         }
