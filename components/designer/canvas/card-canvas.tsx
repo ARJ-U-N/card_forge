@@ -120,6 +120,8 @@ interface Props {
   members?: Member[]
   /** Whether the Width/Height linked constraint is ON (for circle dynamic images) */
   sizeLocked?: boolean
+  /** True when spacebar-pan navigation is active; suppresses element interactions */
+  isPanning?: boolean
 }
 
 export function CardCanvas({
@@ -133,6 +135,7 @@ export function CardCanvas({
   maxLengthPreviewIds,
   members,
   sizeLocked,
+  isPanning,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -151,6 +154,7 @@ export function CardCanvas({
 
   // ── Drag mechanics ────────────────────────────────────────────────────
   const handleMouseDown = (e: React.MouseEvent, el: CanvasElement, mode: DragMode = 'move') => {
+    if (isPanning) return // Let event bubble to workspace for pan handling
     if (el.locked) return
     e.stopPropagation()
     e.preventDefault()
@@ -285,7 +289,7 @@ export function CardCanvas({
           <div
             key={h.mode}
             className="absolute z-50 rounded-sm bg-primary border border-white shadow-sm"
-            style={{ ...h.style, width: handleSize, height: handleSize, cursor: h.cursor, position: 'absolute' }}
+            style={{ ...h.style, width: handleSize, height: handleSize, cursor: isPanning ? 'inherit' : h.cursor, position: 'absolute' }}
             onMouseDown={(e) => handleMouseDown(e, el, h.mode)}
           />
         ))}
@@ -335,7 +339,7 @@ export function CardCanvas({
       left: el.x, top: el.y,
       width: el.width, height: el.height,
       transform: el.rotation ? `rotate(${el.rotation}deg)` : undefined,
-      cursor: el.locked ? 'default' : 'move',
+      cursor: isPanning ? 'inherit' : el.locked ? 'default' : 'move',
       zIndex: el.zIndex,
       opacity,
     }
@@ -560,7 +564,7 @@ export function CardCanvas({
             height: cardH * scale,
             background: doc.background || config.frontBackground,
           }}
-          onClick={(e) => { if (e.target === e.currentTarget) onSelectElement(null) }}
+          onClick={(e) => { if (!isPanning && e.target === e.currentTarget) onSelectElement(null) }}
         >
           <div className="absolute inset-0 origin-top-left" style={{ transform: `scale(${scale})`, width: cardW, height: cardH }}>
             {/* Slot punch */}

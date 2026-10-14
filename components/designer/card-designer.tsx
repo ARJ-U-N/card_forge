@@ -68,6 +68,16 @@ export function CardDesigner({ designId }: Props) {
   // ── Linked Width/Height — editing aid for circle dynamic images (never persisted) ──
   const [sizeLocked, setSizeLocked] = useState(true)
 
+  // ── Canvas navigation — spacebar pan + wheel zoom (never persisted) ──
+  const canvasWorkspaceRef = useRef<HTMLDivElement>(null)
+  const canvasContentRef = useRef<HTMLDivElement>(null)
+  const spaceHeldRef = useRef(false)
+  const panStartRef = useRef<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null)
+  const panOffsetRef = useRef({ x: 0, y: 0 })
+  const [cursorMode, setCursorMode] = useState<'default' | 'grab' | 'grabbing'>('default')
+  const zoomRef = useRef(zoom)
+  useEffect(() => { zoomRef.current = zoom }, [zoom])
+
   // ── Undo / Redo — Designer-session-only (never persisted) ───────────────
   const frontDocRef = useRef(frontDoc)
   const backDocRef = useRef(backDoc)
@@ -223,6 +233,84 @@ export function CardDesigner({ designId }: Props) {
   // ── Zoom ──────────────────────────────────────────────────────────────
   const handleZoomIn = () => setZoom((z) => Math.min(200, z + 10))
   const handleZoomOut = () => setZoom((z) => Math.max(30, z - 10))
+
+  // ── Mouse-wheel zoom ────────────────────────────────────────────────
+  // Dep on `loading` so the effect re-runs once the workspace div is
+  // actually mounted (it is conditionally rendered after the design loads).
+  useEffect(() => {
+    const el = canvasWorkspaceRef.current
+    if (!el) return
+    const handler = (e: WheelEvent) => {
+      e.preventDefault()
+      const delta = e.deltaY < 0 ? 10 : -10
+      setZoom((z) => Math.max(30, Math.min(200, z + delta)))
+    }
+    el.addEventListener('wheel', handler, { passive: false })
+    return () => el.removeEventListener('wheel', handler)
+  }, [loading])
+
+  // ── Spacebar + drag to pan ──────────────────────────────────────────
+  useEffect(() => {
+    const isEditableTarget = (t: EventTarget | null): boolean => {
+      if (!t || !(t instanceof HTMLElement)) return false
+      const tag = t.tagName
+      return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || t.isContentEditable
+    }
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.repeat || isEditableTarget(e.target)) return
+      e.preventDefault()
+      spaceHeldRef.current = true
+      setCursorMode('grab')
+    }
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return
+      spaceHeldRef.current = false
+      panStartRef.current = null
+      setCursorMode('default')
+    }
+    const onBlur = () => {
+      spaceHeldRef.current = false
+      panStartRef.current = null
+      setCursorMode('default')
+    }
+    const onMouseMove = (e: MouseEvent) => {
+      const ps = panStartRef.current
+      if (!ps) return
+      const content = canvasContentRef.current
+      if (!content) return
+      const newX = ps.offsetX + (e.clientX - ps.x)
+      const newY = ps.offsetY + (e.clientY - ps.y)
+      panOffsetRef.current = { x: newX, y: newY }
+      content.style.transform = `translate(${newX}px, ${newY}px)`
+    }
+    const onMouseUp = () => {
+      if (!panStartRef.current) return
+      panStartRef.current = null
+      setCursorMode(spaceHeldRef.current ? 'grab' : 'default')
+    }
+    window.addEventListener('keydown', onKeyDown)
+    window.addEventListener('keyup', onKeyUp)
+    window.addEventListener('blur', onBlur)
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown)
+      window.removeEventListener('keyup', onKeyUp)
+      window.removeEventListener('blur', onBlur)
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+    }
+  }, [])
+
+  const handlePanStart = useCallback((e: React.MouseEvent) => {
+    if (!spaceHeldRef.current) return
+    e.preventDefault()
+    panStartRef.current = {
+      x: e.clientX, y: e.clientY,
+      offsetX: panOffsetRef.current.x, offsetY: panOffsetRef.current.y,
+    }
+    setCursorMode('grabbing')
+  }, [])
 
   // ── Element operations ────────────────────────────────────────────────
   const handleUpdateElement = useCallback(
@@ -533,19 +621,27 @@ export function CardDesigner({ designId }: Props) {
           tableColumnRoles={linkedFolder?.tableColumnRoles}
         />
 
-        <div className="flex flex-1 items-center justify-center bg-muted/30 overflow-auto p-6">
-          <CardCanvas
-            config={config}
-            document={activeDoc}
-            zoom={zoom}
-            selectedElementId={selectedElementId}
-            onSelectElement={setSelectedElementId}
-            onUpdateElement={handleUpdateElement}
-            onBeforeChange={pushUndo}
-            maxLengthPreviewIds={maxLengthPreviewIds}
-            members={members}
-            sizeLocked={sizeLocked}
-          />
+        <div
+          ref={canvasWorkspaceRef}
+          className="flex flex-1 items-center justify-center bg-muted/30 overflow-hidden p-6"
+          style={cursorMode !== 'default' ? { cursor: cursorMode === 'grabbing' ? 'grabbing' : 'grab' } : undefined}
+          onMouseDown={handlePanStart}
+        >
+          <div ref={canvasContentRef} style={{ transform: `translate(${panOffsetRef.current.x}px, ${panOffsetRef.current.y}px)` }}>
+            <CardCanvas
+              config={config}
+              document={activeDoc}
+              zoom={zoom}
+              selectedElementId={selectedElementId}
+              onSelectElement={setSelectedElementId}
+              onUpdateElement={handleUpdateElement}
+              onBeforeChange={pushUndo}
+              maxLengthPreviewIds={maxLengthPreviewIds}
+              members={members}
+              sizeLocked={sizeLocked}
+              isPanning={cursorMode !== 'default'}
+            />
+          </div>
         </div>
 
         <RightPanel
