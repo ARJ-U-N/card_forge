@@ -116,6 +116,8 @@ interface Props {
   onBeforeChange?: () => void
   /** Designer-only: element IDs with Max Length Text preview enabled */
   maxLengthPreviewIds?: Set<string>
+  /** Designer-only: pre-computed preview dimensions for Max Length Text elements */
+  maxLenPreviewDims?: Map<string, { width: number; height: number }>
   /** Designer-only: member data for Max Length Text lookup */
   members?: Member[]
   /** Whether the Width/Height linked constraint is ON (for circle dynamic images) */
@@ -133,6 +135,7 @@ export function CardCanvas({
   onUpdateElement,
   onBeforeChange,
   maxLengthPreviewIds,
+  maxLenPreviewDims,
   members,
   sizeLocked,
   isPanning,
@@ -162,7 +165,9 @@ export function CardCanvas({
     onSelectElement(el.id)
     const isCD = el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
     const isQR = el.type === 'image' && !!el.props.qrCode
-    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD, isQR })
+    // Use preview dimensions for drag start when Max Length Text is active
+    const pDims = maxLenPreviewDims?.get(el.id)
+    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: pDims?.width ?? el.width, elH: pDims?.height ?? el.height, isCircleDynamic: isCD, isQR })
   }
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -376,12 +381,27 @@ export function CardCanvas({
         const fieldName = (el.props.fieldName as string) ?? ''
         const isMaxLen = maxLengthPreviewIds?.has(el.id) ?? false
         const maxVal = isMaxLen ? maxLengthValues.get(fieldName) : undefined
+
+        // When Max Length Text is active, use pre-computed preview dimensions
+        // from card-designer. These are stable (NOT dependent on el.x) and
+        // include word-wrap-based height. Never saved to the design.
+        const previewDims = maxVal ? maxLenPreviewDims?.get(el.id) : undefined
+        const fieldWrapperStyle: React.CSSProperties = previewDims
+          ? {
+              ...wrapperStyle,
+              width: previewDims.width,
+              height: previewDims.height,
+            }
+          : wrapperStyle
+
         return (
-          <div key={el.id} style={wrapperStyle} onMouseDown={(e) => handleMouseDown(e, el)}
+          <div key={el.id} style={fieldWrapperStyle} onMouseDown={(e) => handleMouseDown(e, el)}
             className={cn(
-              'select-none overflow-hidden',
+              'select-none',
+              maxVal ? 'overflow-visible' : 'overflow-hidden',
               isSelected && 'ring-2 ring-primary ring-offset-1',
               config.textBoundaries && !isSelected && 'border border-dashed border-blue-400/30',
+              maxVal && !isSelected && 'border border-dashed border-amber-400/50',
             )}>
             <span style={{
               fontSize: (el.props.fontSize as number) ?? 14,
@@ -390,7 +410,7 @@ export function CardCanvas({
               color: (el.props.color as string) ?? '#000',
               fontFamily: (el.props.fontFamily as string) ?? 'Inter, sans-serif',
               textAlign: (el.props.textAlign as CanvasRenderingContext2D['textAlign']) ?? 'left',
-              whiteSpace: 'pre-wrap', lineHeight: 1.3, display: 'block', width: '100%',
+              whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', lineHeight: 1.3, display: 'block', width: '100%',
             }}>
               {maxVal ? (
                 <>{(el.props.label as string) ?? ''}<span className="bg-amber-100/70 rounded px-0.5">{maxVal}</span></>
