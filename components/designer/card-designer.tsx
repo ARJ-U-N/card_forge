@@ -1,5 +1,5 @@
 'use client'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
@@ -65,76 +65,6 @@ export function CardDesigner({ designId }: Props) {
   // ── Max Length Text — Designer-only preview state (never persisted) ──
   const [members, setMembers] = useState<Member[]>([])
   const [maxLengthPreviewIds, setMaxLengthPreviewIds] = useState<Set<string>>(new Set())
-  // User-controlled preview widths (separate from el.width so resizing is preserved)
-  const [maxLenUserWidths, setMaxLenUserWidths] = useState<Map<string, number>>(new Map())
-
-  // ── Max Length Text: compute stable preview dimensions per element ──
-  // Width is read from maxLenUserWidths (set once on toggle-ON, then updated by resize).
-  // Height is auto-computed via a character-aware word-wrap algorithm.
-  // These are NEVER persisted — used only for canvas rendering & Right Panel display.
-  const maxLenPreviewDims = useMemo(() => {
-    const dims = new Map<string, { width: number; height: number }>()
-    if (!maxLengthPreviewIds.size || !members.length || !config) return dims
-    const canvas = document.createElement('canvas')
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return dims
-    const activeDoc = activeSide === 'front' ? frontDoc : backDoc
-    for (const el of activeDoc.elements) {
-      if (el.type !== 'field' || !maxLengthPreviewIds.has(el.id)) continue
-      const fieldName = (el.props.fieldName as string) ?? ''
-      // Find longest value
-      let longest = ''
-      for (const m of members) {
-        const val = resolveDynamicText(m, fieldName)
-        if (val && !val.startsWith('{') && val.length > longest.length) longest = val
-      }
-      if (!longest) continue
-      const label = (el.props.label as string) ?? ''
-      const fullText = label + longest
-      const fontSize = (el.props.fontSize as number) ?? 14
-      const fontWeight = (el.props.fontWeight as string) ?? 'normal'
-      const fontStyle = (el.props.fontStyle as string) ?? 'normal'
-      const fontFamily = (el.props.fontFamily as string) ?? 'Inter, sans-serif'
-      const lineHeight = fontSize * 1.3
-      ctx.font = `${fontStyle} ${fontWeight} ${fontSize}px ${fontFamily}`
-      // Read from user-controlled width map (set on toggle-ON, updated by resize)
-      const previewW = maxLenUserWidths.get(el.id) ?? el.width
-      // Word-wrap height: word-boundary first, character-level for long unbroken strings
-      const spaceW = ctx.measureText(' ').width
-      const words = fullText.split(/\s+/)
-      let lineWidth = 0
-      let lineCount = 1
-      for (let wi = 0; wi < words.length; wi++) {
-        const word = words[wi]
-        const wordW = ctx.measureText(word).width
-        const gap = lineWidth > 0 ? spaceW : 0
-        // Try to fit word on the current line
-        if (lineWidth > 0 && lineWidth + gap + wordW > previewW) {
-          lineCount++
-          lineWidth = 0
-        }
-        if (lineWidth > 0) lineWidth += gap
-        if (wordW <= previewW) {
-          // Word fits on a single line
-          lineWidth += wordW
-        } else {
-          // Word wider than container — break character by character
-          for (const ch of word) {
-            const chW = ctx.measureText(ch).width
-            if (lineWidth + chW > previewW && lineWidth > 0) {
-              lineCount++
-              lineWidth = chW
-            } else {
-              lineWidth += chW
-            }
-          }
-        }
-      }
-      const previewH = Math.max(el.height, Math.ceil(lineCount * lineHeight))
-      dims.set(el.id, { width: Math.round(previewW), height: previewH })
-    }
-    return dims
-  }, [maxLengthPreviewIds, members, config, activeSide, frontDoc, backDoc, maxLenUserWidths])
 
   // ── Linked Width/Height — editing aid for circle dynamic images (never persisted) ──
   const [sizeLocked, setSizeLocked] = useState(true)
@@ -386,30 +316,6 @@ export function CardDesigner({ designId }: Props) {
   // ── Element operations ────────────────────────────────────────────────
   const handleUpdateElement = useCallback(
     (id: string, updates: Partial<CanvasElement>) => {
-      // When Max Length Text is active, redirect width changes to the
-      // preview-width map instead of modifying the actual element width.
-      // Height is auto-computed from word-wrap so it is simply dropped.
-      // Position (x/y) and other props always go through normally.
-      if (maxLengthPreviewIds.has(id) && ('width' in updates || 'height' in updates)) {
-        const { width, height, ...rest } = updates
-        if (width !== undefined) {
-          setMaxLenUserWidths((prev) => {
-            const next = new Map(prev)
-            next.set(id, width as number)
-            return next
-          })
-        }
-        // Pass through non-dimension updates (x, y, rotation, etc.)
-        if (Object.keys(rest).length > 0) {
-          setActiveDoc((prev) => ({
-            ...prev,
-            elements: prev.elements.map((el) =>
-              el.id === id ? { ...el, ...rest } : el,
-            ),
-          }))
-        }
-        return
-      }
       setActiveDoc((prev) => ({
         ...prev,
         elements: prev.elements.map((el) =>
@@ -417,7 +323,7 @@ export function CardDesigner({ designId }: Props) {
         ),
       }))
     },
-    [activeSide, maxLengthPreviewIds],
+    [activeSide],
   )
 
   // ── Stretch to Fit: auto-resize stretched elements when card dimensions change ──
@@ -732,7 +638,7 @@ export function CardDesigner({ designId }: Props) {
               onUpdateElement={handleUpdateElement}
               onBeforeChange={pushUndo}
               maxLengthPreviewIds={maxLengthPreviewIds}
-              maxLenPreviewDims={maxLenPreviewDims}
+
               members={members}
               sizeLocked={sizeLocked}
               isPanning={cursorMode !== 'default'}
@@ -753,49 +659,66 @@ export function CardDesigner({ designId }: Props) {
           tableColumnRoles={linkedFolder?.tableColumnRoles}
           maxLengthPreviewIds={maxLengthPreviewIds}
           onToggleMaxLengthPreview={(id) => {
+            const wasEnabled = maxLengthPreviewIds.has(id)
             setMaxLengthPreviewIds((prev) => {
               const next = new Set(prev)
               if (next.has(id)) next.delete(id)
               else next.add(id)
               return next
             })
-            // When toggling ON: compute initial preview width from text measurement.
-            // When toggling OFF: remove from user-widths map.
-            setMaxLenUserWidths((prev) => {
-              const next = new Map(prev)
-              if (prev.has(id)) {
-                next.delete(id)
-              } else if (config && members.length) {
-                const { w: cardW } = visualCardSize(config)
-                const doc = activeSide === 'front' ? frontDoc : backDoc
-                const el = doc.elements.find((e) => e.id === id)
-                if (el && el.type === 'field') {
-                  const fieldName = (el.props.fieldName as string) ?? ''
-                  let longest = ''
-                  for (const m of members) {
-                    const val = resolveDynamicText(m, fieldName)
-                    if (val && !val.startsWith('{') && val.length > longest.length) longest = val
-                  }
-                  if (longest) {
-                    const c = document.createElement('canvas')
-                    const cx = c.getContext('2d')
-                    if (cx) {
-                      const label = (el.props.label as string) ?? ''
-                      const fs = (el.props.fontSize as number) ?? 14
-                      const fw = (el.props.fontWeight as string) ?? 'normal'
-                      const fi = (el.props.fontStyle as string) ?? 'normal'
-                      const ff = (el.props.fontFamily as string) ?? 'Inter, sans-serif'
-                      cx.font = `${fi} ${fw} ${fs}px ${ff}`
-                      const tw = cx.measureText(label + longest).width + 8
-                      next.set(id, Math.max(el.width, Math.min(Math.ceil(tw), cardW)))
+            // Toggle ON: compute initial dimensions from longest member value
+            // and apply to the ACTUAL element through the normal update path.
+            // Toggle OFF: keep current dimensions as-is (no revert).
+            if (!wasEnabled && config && members.length) {
+              const { w: cardW } = visualCardSize(config)
+              const aDoc = activeSide === 'front' ? frontDoc : backDoc
+              const el = aDoc.elements.find((e) => e.id === id)
+              if (el && el.type === 'field') {
+                const fieldName = (el.props.fieldName as string) ?? ''
+                let longest = ''
+                for (const m of members) {
+                  const val = resolveDynamicText(m, fieldName)
+                  if (val && !val.startsWith('{') && val.length > longest.length) longest = val
+                }
+                if (longest) {
+                  const c = document.createElement('canvas')
+                  const cx = c.getContext('2d')
+                  if (cx) {
+                    const label = (el.props.label as string) ?? ''
+                    const fullText = label + longest
+                    const fs = (el.props.fontSize as number) ?? 14
+                    const fw = (el.props.fontWeight as string) ?? 'normal'
+                    const fi = (el.props.fontStyle as string) ?? 'normal'
+                    const ff = (el.props.fontFamily as string) ?? 'Inter, sans-serif'
+                    const lh = fs * 1.3
+                    cx.font = `${fi} ${fw} ${fs}px ${ff}`
+                    const tw = cx.measureText(fullText).width + 8
+                    const newW = Math.max(el.width, Math.min(Math.ceil(tw), cardW))
+                    // Word-wrap height at the computed width
+                    const spW = cx.measureText(' ').width
+                    const words = fullText.split(/\s+/)
+                    let lnW = 0, lnC = 1
+                    for (let wi = 0; wi < words.length; wi++) {
+                      const word = words[wi]
+                      const wW = cx.measureText(word).width
+                      const gap = lnW > 0 ? spW : 0
+                      if (lnW > 0 && lnW + gap + wW > newW) { lnC++; lnW = 0 }
+                      if (lnW > 0) lnW += gap
+                      if (wW <= newW) { lnW += wW } else {
+                        for (const ch of word) {
+                          const cW = cx.measureText(ch).width
+                          if (lnW + cW > newW && lnW > 0) { lnC++; lnW = cW } else { lnW += cW }
+                        }
+                      }
                     }
+                    const newH = Math.max(el.height, Math.ceil(lnC * lh))
+                    pushUndo()
+                    handleUpdateElement(id, { width: newW, height: newH })
                   }
                 }
               }
-              return next
-            })
+            }
           }}
-          maxLenPreviewDims={maxLenPreviewDims}
           sizeLocked={sizeLocked}
           onSizeLockChange={setSizeLocked}
         />

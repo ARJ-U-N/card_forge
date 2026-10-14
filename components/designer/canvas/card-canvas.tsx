@@ -116,8 +116,6 @@ interface Props {
   onBeforeChange?: () => void
   /** Designer-only: element IDs with Max Length Text preview enabled */
   maxLengthPreviewIds?: Set<string>
-  /** Designer-only: pre-computed preview dimensions for Max Length Text elements */
-  maxLenPreviewDims?: Map<string, { width: number; height: number }>
   /** Designer-only: member data for Max Length Text lookup */
   members?: Member[]
   /** Whether the Width/Height linked constraint is ON (for circle dynamic images) */
@@ -135,7 +133,6 @@ export function CardCanvas({
   onUpdateElement,
   onBeforeChange,
   maxLengthPreviewIds,
-  maxLenPreviewDims,
   members,
   sizeLocked,
   isPanning,
@@ -165,9 +162,7 @@ export function CardCanvas({
     onSelectElement(el.id)
     const isCD = el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
     const isQR = el.type === 'image' && !!el.props.qrCode
-    // Use preview dimensions for drag start when Max Length Text is active
-    const pDims = maxLenPreviewDims?.get(el.id)
-    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: pDims?.width ?? el.width, elH: pDims?.height ?? el.height, isCircleDynamic: isCD, isQR })
+    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD, isQR })
   }
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -382,20 +377,11 @@ export function CardCanvas({
         const isMaxLen = maxLengthPreviewIds?.has(el.id) ?? false
         const maxVal = isMaxLen ? maxLengthValues.get(fieldName) : undefined
 
-        // When Max Length Text is active, use pre-computed preview dimensions
-        // from card-designer. These are stable (NOT dependent on el.x) and
-        // include word-wrap-based height. Never saved to the design.
-        const previewDims = maxVal ? maxLenPreviewDims?.get(el.id) : undefined
-        const fieldWrapperStyle: React.CSSProperties = previewDims
-          ? {
-              ...wrapperStyle,
-              width: previewDims.width,
-              height: previewDims.height,
-            }
-          : wrapperStyle
+        // Max Length Text just changes which text is displayed.
+        // Dimensions are always the actual el.width / el.height.
 
         return (
-          <div key={el.id} style={fieldWrapperStyle} onMouseDown={(e) => handleMouseDown(e, el)}
+          <div key={el.id} style={wrapperStyle} onMouseDown={(e) => handleMouseDown(e, el)}
             className={cn(
               'select-none',
               maxVal ? 'overflow-visible' : 'overflow-hidden',

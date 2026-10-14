@@ -61,8 +61,6 @@ interface Props {
   maxLengthPreviewIds?: Set<string>
   /** Designer-only: toggle Max Length Text for an element */
   onToggleMaxLengthPreview?: (id: string) => void
-  /** Designer-only: pre-computed preview dimensions for Max Length Text elements */
-  maxLenPreviewDims?: Map<string, { width: number; height: number }>
   /** Whether Width/Height are linked for circle dynamic images */
   sizeLocked: boolean
   /** Callback to toggle sizeLocked */
@@ -101,7 +99,6 @@ export function RightPanel({
   tableColumnRoles,
   maxLengthPreviewIds,
   onToggleMaxLengthPreview,
-  maxLenPreviewDims,
   sizeLocked,
   onSizeLockChange,
 }: Props) {
@@ -369,18 +366,13 @@ export function RightPanel({
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 gap-2">
-                    {(['width', 'height'] as const).map((k) => {
-                      // Show effective preview dimensions when Max Length Text is active
-                      const previewDims = el && maxLenPreviewDims?.get(el.id)
-                      const displayVal = previewDims ? Math.round(previewDims[k]) : Math.round(el[k])
-                      return (
-                        <div key={k} className="flex flex-col gap-0.5">
-                          <label className="text-[10px] text-muted-foreground uppercase">{k}</label>
-                          <Input type="number" value={displayVal} className="h-7 text-xs"
-                            onChange={(e) => onUpdateElement(el.id, { [k]: Number(e.target.value) })} />
-                        </div>
-                      )
-                    })}
+                    {(['width', 'height'] as const).map((k) => (
+                      <div key={k} className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground uppercase">{k}</label>
+                        <Input type="number" value={Math.round(el[k])} className="h-7 text-xs"
+                          onChange={(e) => onUpdateElement(el.id, { [k]: Number(e.target.value) })} />
+                      </div>
+                    ))}
                   </div>
                 )}
                 <div className="flex flex-col gap-0.5">
