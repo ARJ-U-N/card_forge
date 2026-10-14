@@ -393,7 +393,7 @@ export function CardCanvas({
               whiteSpace: 'pre-wrap', lineHeight: 1.3, display: 'block', width: '100%',
             }}>
               {maxVal ? (
-                <>{(el.props.label as string) ?? ''}<span className="bg-amber-100/70 text-amber-800 rounded px-0.5">{maxVal}</span></>
+                <>{(el.props.label as string) ?? ''}<span className="bg-amber-100/70 rounded px-0.5">{maxVal}</span></>
               ) : (
                 <>{(el.props.label as string) ?? ''}<span className="bg-blue-100/50 text-blue-700 rounded px-0.5">{`{${fieldName}}`}</span></>
               )}
