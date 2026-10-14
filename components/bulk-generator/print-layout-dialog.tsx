@@ -463,12 +463,33 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
                     </p>
                   ) : (
                     <p className="text-[9px] text-muted-foreground">
-                      Match your printer’s duplex flip direction.
+                      Match your printer&apos;s duplex flip direction.
                     </p>
                   )}
                 </Section>
               </>
             )}
+
+            {/* Rotate Page 180° — only in front-only or back-only mode */}
+            {(config.printMode === 'front-only' || config.printMode === 'back-only') && (
+              <>
+                <Separator />
+                <Section title="Page Rotation">
+                  <div className="flex items-center gap-2">
+                    <Checkbox
+                      id="rotatePage180"
+                      checked={config.rotatePage180}
+                      onCheckedChange={(v) => update('rotatePage180', !!v)}
+                    />
+                    <label htmlFor="rotatePage180" className="text-[10px]">Rotate Page 180°</label>
+                  </div>
+                  <p className="text-[9px] text-muted-foreground">
+                    Rotates the entire {config.printMode === 'back-only' ? 'back' : 'front'} page content 180°. Useful when manually flipping the paper to print the other side separately.
+                  </p>
+                </Section>
+              </>
+            )}
+
 
             <Separator />
 
@@ -652,7 +673,8 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
                   <div style={{
                     width: '100%',
                     height: '100%',
-                    ...(currentPageData.side === 'back' && config.duplexBack === 'rotate-page-180' ? {
+                    ...((currentPageData.side === 'back' && config.duplexBack === 'rotate-page-180') ||
+                      (config.rotatePage180 && (config.printMode === 'front-only' || config.printMode === 'back-only')) ? {
                       transform: 'rotate(180deg)',
                     } : {}),
                   }}>

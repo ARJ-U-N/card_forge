@@ -53,6 +53,8 @@ export interface PrintConfig {
   frontAdjustment: SideAdjustment
   /** Fine X/Y/rotation adjustment for back side */
   backAdjustment: SideAdjustment
+  /** Rotate the entire page 180° (single-sided: front-only / back-only) */
+  rotatePage180: boolean
 }
 
 /** Migrate a config that may have the old single `gutter` field */
@@ -67,9 +69,9 @@ export function migratePrintConfig(raw: Partial<PrintConfig> & { gutter?: number
 export const DEFAULT_PRINT_CONFIG: PrintConfig = {
   paperSize: 'a4',
   orientation: 'portrait',
-  margins: { top: 10, bottom: 10, left: 10, right: 10 },
-  gutterH: 3,
-  gutterV: 3,
+  margins: { top: 0, bottom: 0, left: 0, right: 0 },
+  gutterH: 0,
+  gutterV: 0,
   rows: 4,
   columns: 2,
   autoLayout: true,
@@ -80,6 +82,7 @@ export const DEFAULT_PRINT_CONFIG: PrintConfig = {
   duplexBack: 'mirror-h',
   frontAdjustment: { ...DEFAULT_SIDE_ADJUSTMENT },
   backAdjustment: { ...DEFAULT_SIDE_ADJUSTMENT },
+  rotatePage180: false,
 }
 
 // ---------------------------------------------------------------------------
@@ -383,12 +386,21 @@ export async function generatePDF(
     pages.forEach((p, i) => { if (p.side === 'back') backPageNumbers.add(i + 1) }) // 1-indexed
 
     let putPageCounter = 0
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+        putPageCounter++
+        if (backPageNumbers.has(putPageCounter)) {
+          this.internal.write('/Rotate 180')
+        }
+      })
+  }
+
+  // ── Page-level /Rotate 180 for single-sided rotatePage180 ──────────────
+  // Same mechanism, applied to ALL pages when front-only or back-only.
+  if (config.rotatePage180 && (config.printMode === 'front-only' || config.printMode === 'back-only')) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
-      putPageCounter++
-      if (backPageNumbers.has(putPageCounter)) {
-        this.internal.write('/Rotate 180')
-      }
+    ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      this.internal.write('/Rotate 180')
     })
   }
 
@@ -403,7 +415,7 @@ export async function generatePDF(
     const hasAdj = adj.offsetX !== 0 || adj.offsetY !== 0 || adj.rotation !== 0
     if (hasAdj) {
       // Save the current graphics state
-      ;(pdf as any).saveGraphicsState()
+      ; (pdf as any).saveGraphicsState()
       // Apply translation
       if (adj.offsetX !== 0 || adj.offsetY !== 0) {
         // jsPDF doesn't have a direct translate; we offset all coordinates below
@@ -416,10 +428,10 @@ export async function generatePDF(
         const rad = (adj.rotation * Math.PI) / 180
         const cos = Math.cos(rad)
         const sin = Math.sin(rad)
-        // Translate to center, rotate, translate back
-        ;(pdf as any).setCurrentTransformationMatrix(
-          (pdf as any).Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos)
-        )
+          // Translate to center, rotate, translate back
+          ; (pdf as any).setCurrentTransformationMatrix(
+            (pdf as any).Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos)
+          )
       }
     }
 
@@ -507,7 +519,7 @@ export async function generatePDF(
 
     // Restore graphics state if we applied adjustments
     if (hasAdj && adj.rotation !== 0) {
-      ;(pdf as any).restoreGraphicsState()
+      ; (pdf as any).restoreGraphicsState()
     }
 
     // Yield to main thread

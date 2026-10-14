@@ -1326,6 +1326,19 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
     })
   }
 
+  // ── Page-level /Rotate 180 for single-sided rotatePage180 ──────────────
+  // Same mechanism, applied to ALL pages when front-only or back-only.
+  // NOTE: if rotated-90 is also active, every page already gets /Rotate 90
+  // from the handler above.  The last /Rotate wins in the PDF dictionary,
+  // so we use the combined value (270 = 90 + 180) to avoid overriding it.
+  if (config.rotatePage180 && (config.printMode === 'front-only' || config.printMode === 'back-only')) {
+    const rotateValue = isRotated90 ? 270 : 180
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      this.internal.write(`/Rotate ${rotateValue}`)
+    })
+  }
+
   const totalPages = pages.length
 
   for (let pi = 0; pi < pages.length; pi++) {
