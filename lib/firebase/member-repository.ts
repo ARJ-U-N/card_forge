@@ -63,6 +63,7 @@ function mapMember(snap: DocumentSnapshot<DocumentData>): Member | null {
     fingerprint: d.fingerprint ?? '',
     divisionLogo: d.divisionLogo ?? '',
     rowNumber: typeof d.rowNumber === 'number' ? d.rowNumber : undefined,
+    displayOrder: typeof d.displayOrder === 'number' ? d.displayOrder : undefined,
     customFields: d.customFields ?? {},
     createdAt: toIso(d.createdAt),
     updatedAt: toIso(d.updatedAt),
@@ -98,6 +99,27 @@ export async function getNextRowNumber(
   if (snap.empty) return 1
   const maxRow = snap.docs[0].data().rowNumber
   return (typeof maxRow === 'number' ? maxRow : 0) + 1
+}
+
+/**
+ * Get the next available displayOrder for a given folder.
+ * displayOrder is folder-wide (not per-subfolder) and preserves the
+ * sequence of rows from imported Excel files.
+ */
+export async function getNextDisplayOrder(
+  workspaceId: string,
+  folderId: string,
+): Promise<number> {
+  const q = query(
+    membersCol(workspaceId),
+    where('folderId', '==', folderId),
+    orderBy('displayOrder', 'desc'),
+    limit(1),
+  )
+  const snap = await getDocs(q)
+  if (snap.empty) return 1
+  const maxOrder = snap.docs[0].data().displayOrder
+  return (typeof maxOrder === 'number' ? maxOrder : 0) + 1
 }
 
 // ---------------------------------------------------------------------------

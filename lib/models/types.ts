@@ -143,6 +143,8 @@ export interface Member {
   divisionLogo: string
   /** Stable per-subfolder row number (1, 2, 3…). Assigned at creation, never changes. */
   rowNumber?: number
+  /** Folder-wide display order (1, 2, 3…). Preserves Excel import row sequence across subfolders. */
+  displayOrder?: number
   /** Arbitrary key-value pairs for workspace-specific data */
   customFields: Record<string, string>
   createdAt: string
@@ -235,6 +237,10 @@ export interface CardConfiguration {
   frontBackground: string
   backBackground: string
   safeZoneMargin: number
+  /** Horizontal safe-zone inset in mm (left/right). Falls back to safeZoneMargin when absent. */
+  safeZoneMarginX?: number
+  /** Vertical safe-zone inset in mm (top/bottom). Falls back to safeZoneMargin when absent. */
+  safeZoneMarginY?: number
   textBoundaries: boolean
   /** Whether the card has a back side. Defaults to true for backward compatibility. */
   isDoubleSide: boolean

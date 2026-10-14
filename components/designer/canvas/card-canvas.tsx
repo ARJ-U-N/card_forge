@@ -142,7 +142,10 @@ export function CardCanvas({
   const cardW = isVertical ? baseH : baseW
   const cardH = isVertical ? baseW : baseH
   const scale = zoom / 100
-  const safeZone = config.safeZoneMargin * 3
+  // Independent horizontal and vertical safe-zone margins (px).
+  // Falls back to the legacy single safeZoneMargin for backward compatibility.
+  const safeZoneX = (config.safeZoneMarginX ?? config.safeZoneMargin) * PX_PER_MM
+  const safeZoneY = (config.safeZoneMarginY ?? config.safeZoneMargin) * PX_PER_MM
 
   const sorted = [...doc.elements].sort((a, b) => a.zIndex - b.zIndex)
 
@@ -560,12 +563,6 @@ export function CardCanvas({
           onClick={(e) => { if (e.target === e.currentTarget) onSelectElement(null) }}
         >
           <div className="absolute inset-0 origin-top-left" style={{ transform: `scale(${scale})`, width: cardW, height: cardH }}>
-            {/* Safe zone */}
-            {safeZone > 0 && (
-              <div className="absolute border border-dashed border-red-400/25 pointer-events-none"
-                style={{ top: safeZone, left: safeZone, width: cardW - safeZone * 2, height: cardH - safeZone * 2 }} />
-            )}
-
             {/* Slot punch */}
             {config.slotPunch !== 'none' && (
               <div className="absolute left-1/2 -translate-x-1/2 bg-black/8 border border-dashed border-muted-foreground/20 pointer-events-none"
@@ -574,6 +571,12 @@ export function CardCanvas({
 
             {/* Elements */}
             {sorted.map(renderElement)}
+
+            {/* Safe zone — rendered AFTER elements so it stays on top */}
+            {(safeZoneX > 0 || safeZoneY > 0) && (
+              <div className="absolute border border-dashed border-red-400/50 pointer-events-none"
+                style={{ top: safeZoneY, left: safeZoneX, width: cardW - safeZoneX * 2, height: cardH - safeZoneY * 2, zIndex: 9999 }} />
+            )}
           </div>
         </div>
       </div>

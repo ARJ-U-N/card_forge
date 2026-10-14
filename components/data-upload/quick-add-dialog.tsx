@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { createManyMembers } from '@/lib/firebase/member-repository'
+import { createManyMembers, getNextDisplayOrder } from '@/lib/firebase/member-repository'
 import { quickAddRowSchema } from '@/lib/validation/data-upload'
 
 interface Row {
@@ -131,7 +131,13 @@ export function QuickAddDialog({
         customFields: {},
       }))
 
-      const count = await createManyMembers(workspaceId, members)
+      // Assign folder-wide display order so quick-added members sort after existing ones
+      const startDisplayOrder = await getNextDisplayOrder(workspaceId, folderId)
+
+      const count = await createManyMembers(workspaceId, members.map((m, i) => ({
+        ...m,
+        displayOrder: startDisplayOrder + i,
+      })))
       toast.success(`${count} member${count !== 1 ? 's' : ''} added`)
       clearAll()
       onOpenChange(false)

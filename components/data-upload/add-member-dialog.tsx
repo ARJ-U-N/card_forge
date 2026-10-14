@@ -34,7 +34,7 @@ import {
   FieldGroup,
   FieldLabel,
 } from '@/components/ui/field'
-import { createMember, updateMember, getNextRowNumber } from '@/lib/firebase/member-repository'
+import { createMember, updateMember, getNextRowNumber, getNextDisplayOrder } from '@/lib/firebase/member-repository'
 import { memberSchema, type MemberValues } from '@/lib/validation/data-upload'
 import type { Folder, Member } from '@/lib/models/types'
 import { storage } from '@/lib/storage'
@@ -220,7 +220,8 @@ function DynamicAddMemberForm({
         // Assign a per-subfolder row number
         const effectiveSubfolderId = subfolderId === '__none__' ? null : subfolderId
         const rowNumber = await getNextRowNumber(workspaceId, folderId, effectiveSubfolderId)
-        await createMember(workspaceId, { ...data, rowNumber })
+        const displayOrder = await getNextDisplayOrder(workspaceId, folderId)
+        await createMember(workspaceId, { ...data, rowNumber, displayOrder })
         toast.success('Row added')
       }
       onOpenChange(false)

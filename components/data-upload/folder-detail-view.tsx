@@ -168,7 +168,15 @@ export function FolderDetailView({ folderId }: Props) {
           Object.values(m.customFields ?? {}).some((v) => v.toLowerCase().includes(q)),
       )
     }
-    return list
+    // Sort by displayOrder to preserve Excel import row sequence.
+    // Members without displayOrder (legacy) sort to the end by createdAt.
+    return [...list].sort((a, b) => {
+      const oa = a.displayOrder ?? Number.MAX_SAFE_INTEGER
+      const ob = b.displayOrder ?? Number.MAX_SAFE_INTEGER
+      if (oa !== ob) return oa - ob
+      // Fallback: sort by createdAt for legacy members without displayOrder
+      return a.createdAt.localeCompare(b.createdAt)
+    })
   }, [members, search, selectedSubfolder, tableNameCol])
 
   const handleExport = () => {
@@ -196,6 +204,13 @@ export function FolderDetailView({ folderId }: Props) {
       })
       return
     }
+    // Sort by displayOrder to match the Data Upload table's display sequence
+    downloadMembers = [...downloadMembers].sort((a, b) => {
+      const oa = a.displayOrder ?? Number.MAX_SAFE_INTEGER
+      const ob = b.displayOrder ?? Number.MAX_SAFE_INTEGER
+      if (oa !== ob) return oa - ob
+      return a.createdAt.localeCompare(b.createdAt)
+    })
     exportFolderDataToXlsx(downloadMembers, cols, folder?.name ?? 'members')
   }
 

@@ -181,20 +181,36 @@ export function CardOptionsPanel({ config, onConfigChange }: Props) {
 
       <Separator />
 
-      {/* Safe zone */}
-      <div className="flex flex-col gap-1.5">
-        <label className="text-xs font-medium">
-          Safe Zone Margin ({config.safeZoneMargin}mm)
-        </label>
-        <input
-          type="range"
-          min={0}
-          max={15}
-          step={1}
-          value={config.safeZoneMargin}
-          onChange={(e) => update('safeZoneMargin', Number(e.target.value))}
-          className="w-full accent-primary"
-        />
+      {/* Safe zone — independent horizontal (X) and vertical (Y) margins */}
+      <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium">
+            Horizontal Safe Zone X ({config.safeZoneMarginX ?? config.safeZoneMargin}mm)
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={15}
+            step={1}
+            value={config.safeZoneMarginX ?? config.safeZoneMargin}
+            onChange={(e) => update('safeZoneMarginX', Number(e.target.value))}
+            className="w-full accent-primary"
+          />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <label className="text-xs font-medium">
+            Vertical Safe Zone Y ({config.safeZoneMarginY ?? config.safeZoneMargin}mm)
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={15}
+            step={1}
+            value={config.safeZoneMarginY ?? config.safeZoneMargin}
+            onChange={(e) => update('safeZoneMarginY', Number(e.target.value))}
+            className="w-full accent-primary"
+          />
+        </div>
       </div>
 
       {/* Text boundaries */}

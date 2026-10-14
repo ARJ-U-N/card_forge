@@ -28,7 +28,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { createManyMembers, getNextRowNumber } from '@/lib/firebase/member-repository'
+import { createManyMembers, getNextRowNumber, getNextDisplayOrder } from '@/lib/firebase/member-repository'
 import { updateFolderColumns } from '@/lib/firebase/folder-repository'
 
 // ---------------------------------------------------------------------------
@@ -178,9 +178,13 @@ export function ImportDialog({
       // Get the next available row number for this subfolder
       const startRowNumber = await getNextRowNumber(workspaceId, folderId, subfolderId ?? null)
 
+      // Get the next available displayOrder for the folder (folder-wide, cross-subfolder)
+      const startDisplayOrder = await getNextDisplayOrder(workspaceId, folderId)
+
       const count = await createManyMembers(workspaceId, members.map((m, i) => ({
         ...m,
         rowNumber: startRowNumber + i,
+        displayOrder: startDisplayOrder + i,
       })))
 
       // Only set folder columns when NO table exists yet (first import creates the table).
