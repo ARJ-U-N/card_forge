@@ -1,11 +1,15 @@
 'use client'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 import {
+  AlertTriangleIcon,
   ArrowLeftIcon,
   CheckCircleIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   EyeIcon,
+  RefreshCwIcon,
   SaveIcon,
   UsersIcon,
   ZoomInIcon,
@@ -14,6 +18,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
+import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { useAuth } from '@/components/providers/auth-provider'
 import { usePortal } from '@/components/providers/portal-provider'
 import { getDesign, updateDesign } from '@/lib/firebase/design-repository'
@@ -27,11 +32,14 @@ import type {
   Folder,
   Member,
 } from '@/lib/models/types'
+import { getTableNameColumn, getMemberDisplayName } from '@/lib/models/types'
 import { LeftPanel } from './panels/left-panel'
 import { RightPanel } from './panels/right-panel'
 import { CardCanvas, visualCardSize } from './canvas/card-canvas'
 import { getMembersInFolder } from '@/lib/firebase/member-repository'
 import { resolveDynamicText } from '@/lib/card-renderer'
+import { createResolutionSession, isResolved } from '@/lib/local-photos/local-photo-resolver'
+import type { PhotoResolutionResult } from '@/lib/local-photos/local-photo-resolver'
 
 interface Props {
   designId: string
@@ -68,6 +76,16 @@ export function CardDesigner({ designId }: Props) {
 
   // ── Linked Width/Height — editing aid for circle dynamic images (never persisted) ──
   const [sizeLocked, setSizeLocked] = useState(true)
+
+  // ── Member Photo Preview — transient preview state (never persisted) ──
+  const [previewMemberId, setPreviewMemberId] = useState<string | null>(null)
+  const [previewImageSources, setPreviewImageSources] = useState<Record<string, string>>({})
+  const [previewLoading, setPreviewLoading] = useState(false)
+  const [refreshCounter, setRefreshCounter] = useState(0)
+  /** Per-fieldName warnings for failed local-photo resolutions (never persisted) */
+  const [previewWarnings, setPreviewWarnings] = useState<Record<string, { status: string; reason: string }>>({})
+  /** Ref to the session pending disposal — deferred until React commits the replacement render */
+  const pendingDisposeRef = useRef<ReturnType<typeof createResolutionSession> | null>(null)
 
   // ── Canvas navigation — spacebar pan + wheel zoom (never persisted) ──
   const canvasWorkspaceRef = useRef<HTMLDivElement>(null)
@@ -148,6 +166,193 @@ export function CardDesigner({ designId }: Props) {
     if (!workspaceId || !design?.folderId) return
     getMembersInFolder(workspaceId, design.folderId).then(setMembers).catch(() => {})
   }, [workspaceId, design?.folderId])
+
+  // ── Member Photo Preview — sorted members and navigation ──────────────
+  const sortedMembers = useMemo(() => {
+    if (!members.length) return []
+    return [...members].sort((a, b) => {
+      const oa = a.displayOrder ?? Infinity
+      const ob = b.displayOrder ?? Infinity
+      if (oa !== ob) return oa - ob
+      return (a.createdAt ?? '').localeCompare(b.createdAt ?? '')
+    })
+  }, [members])
+
+  const tableNameCol = useMemo(
+    () => getTableNameColumn(linkedFolder?.tableColumnRoles),
+    [linkedFolder?.tableColumnRoles],
+  )
+
+  // Auto-select first member when list loads; reset if current member disappears
+  useEffect(() => {
+    if (sortedMembers.length === 0) {
+      setPreviewMemberId(null)
+      return
+    }
+    if (previewMemberId && sortedMembers.some((m) => m.id === previewMemberId)) return
+    setPreviewMemberId(sortedMembers[0].id)
+  }, [sortedMembers])
+
+  const previewMemberIdx = sortedMembers.findIndex((m) => m.id === previewMemberId)
+  const previewMember = previewMemberIdx >= 0 ? sortedMembers[previewMemberIdx] : null
+  const memberDisplayName = previewMember
+    ? getMemberDisplayName(previewMember, tableNameCol)
+    : ''
+
+  // Collect unique dynamic image field names from both documents
+  const dynamicImageFieldsKey = useMemo(() => {
+    const fields = new Set<string>()
+    const allElements = [...frontDoc.elements, ...backDoc.elements]
+    for (const el of allElements) {
+      if (
+        el.type === 'image' &&
+        el.props.dynamic &&
+        !el.props.qrCode &&
+        !el.props.barcode &&
+        el.props.fieldName
+      ) {
+        fields.add(el.props.fieldName as string)
+      }
+    }
+    return [...fields].sort().join(',')
+  }, [frontDoc.elements, backDoc.elements])
+
+  // Refs to avoid stale closures in the resolution effect
+  const sortedMembersRef = useRef(sortedMembers)
+  useEffect(() => { sortedMembersRef.current = sortedMembers }, [sortedMembers])
+  const sessionRef = useRef<ReturnType<typeof createResolutionSession> | null>(null)
+
+  // Resolve local + Drive photos for the currently previewed member
+  useEffect(() => {
+    if (!previewMemberId || !design?.folderId || !dynamicImageFieldsKey) {
+      setPreviewImageSources({})
+      setPreviewWarnings({})
+      return
+    }
+
+    const fieldNames = dynamicImageFieldsKey.split(',').filter(Boolean)
+    if (fieldNames.length === 0) {
+      setPreviewImageSources({})
+      setPreviewWarnings({})
+      return
+    }
+
+    const member = sortedMembersRef.current.find((m) => m.id === previewMemberId)
+    if (!member) {
+      setPreviewImageSources({})
+      setPreviewWarnings({})
+      return
+    }
+
+    let cancelled = false
+    const prevSession = sessionRef.current
+    const newSession = createResolutionSession()
+    sessionRef.current = newSession
+
+    setPreviewLoading(true)
+
+    ;(async () => {
+      const sources: Record<string, string> = {}
+      const warnings: Record<string, { status: string; reason: string }> = {}
+
+      for (const fieldName of fieldNames) {
+        if (cancelled) break
+
+        let localResult: PhotoResolutionResult | null = null
+
+        // Try local resolution first if member has a subfolder
+        if (member.subfolderId) {
+          try {
+            localResult = await newSession.resolve(
+              design.folderId!,
+              member.subfolderId,
+              fieldName,
+              member.id,
+            )
+          } catch {
+            // IndexedDB or other unexpected failure — treat as no local data
+          }
+        }
+
+        if (cancelled) break
+
+        if (localResult && isResolved(localResult)) {
+          // Local photo resolved successfully
+          sources[fieldName] = localResult.url
+        } else if (!localResult || localResult.status === 'no-assignment') {
+          // No local assignment exists — silent Drive fallback
+          const driveUrl = resolveMemberImageUrl(member, fieldName)
+          if (driveUrl) {
+            sources[fieldName] = driveUrl
+          }
+        } else {
+          // A local assignment exists but resolution failed:
+          // permission-required | file-missing | read-failed | storage-error
+          // Use Drive image as visual fallback but record the warning
+          const driveUrl = resolveMemberImageUrl(member, fieldName)
+          if (driveUrl) {
+            sources[fieldName] = driveUrl
+          }
+          warnings[fieldName] = {
+            status: localResult.status,
+            reason: localResult.reason,
+          }
+        }
+      }
+
+      if (!cancelled) {
+        setPreviewImageSources(sources)
+        setPreviewWarnings(warnings)
+        setPreviewLoading(false)
+        // Defer disposal of the PREVIOUS session until after React commits
+        // the render with the new sources, so blob: URLs from the old session
+        // remain valid until the canvas has switched to the new URLs.
+        if (prevSession) {
+          // Dispose any still-pending previous session first to avoid leaks
+          pendingDisposeRef.current?.dispose()
+          pendingDisposeRef.current = prevSession
+          requestAnimationFrame(() => {
+            if (pendingDisposeRef.current === prevSession) {
+              prevSession.dispose()
+              pendingDisposeRef.current = null
+            }
+          })
+        }
+      } else {
+        // Effect was cancelled; dispose the new session we just created
+        newSession.dispose()
+      }
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [previewMemberId, refreshCounter, design?.folderId, dynamicImageFieldsKey])
+
+  // Cleanup: dispose active session and any pending disposal on unmount
+  useEffect(() => {
+    return () => {
+      sessionRef.current?.dispose()
+      sessionRef.current = null
+      pendingDisposeRef.current?.dispose()
+      pendingDisposeRef.current = null
+    }
+  }, [])
+
+  const navigateMember = useCallback(
+    (delta: number) => {
+      const idx = sortedMembers.findIndex((m) => m.id === previewMemberId)
+      const next = idx + delta
+      if (next >= 0 && next < sortedMembers.length) {
+        setPreviewMemberId(sortedMembers[next].id)
+      }
+    },
+    [sortedMembers, previewMemberId],
+  )
+
+  const handleRefreshPhotos = useCallback(() => {
+    setRefreshCounter((c) => c + 1)
+  }, [])
 
   const activeDoc = activeSide === 'front' ? frontDoc : backDoc
   const setActiveDoc = activeSide === 'front' ? setFrontDoc : setBackDoc
@@ -565,6 +770,96 @@ export function CardDesigner({ designId }: Props) {
           All Previews
         </Button>
 
+        {/* ── Member photo preview navigation ── */}
+        {sortedMembers.length > 0 && (
+          <div className="flex items-center gap-1 rounded-lg border px-1.5 py-0.5">
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => navigateMember(-1)}
+              disabled={previewMemberIdx <= 0}
+              title="Previous member"
+            >
+              <ChevronLeftIcon />
+            </Button>
+            <span className="text-xs tabular-nums text-muted-foreground min-w-[4ch] text-center">
+              {previewMemberIdx >= 0 ? previewMemberIdx + 1 : '–'}/{sortedMembers.length}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={() => navigateMember(1)}
+              disabled={previewMemberIdx >= sortedMembers.length - 1}
+              title="Next member"
+            >
+              <ChevronRightIcon />
+            </Button>
+            <span className="text-xs text-muted-foreground truncate max-w-[140px]" title={memberDisplayName}>
+              {previewLoading ? '…' : memberDisplayName || '—'}
+            </span>
+            <Button
+              variant="ghost"
+              size="icon-xs"
+              onClick={handleRefreshPhotos}
+              disabled={previewLoading}
+              title="Refresh photos from disk"
+            >
+              <RefreshCwIcon className={previewLoading ? 'animate-spin' : ''} />
+            </Button>
+            {/* Local photo resolution warnings */}
+            {Object.keys(previewWarnings).length > 0 && (
+              <Tooltip>
+                <TooltipTrigger
+                  render={
+                    <button
+                      type="button"
+                      className="flex items-center gap-0.5 text-amber-500 hover:text-amber-600 px-0.5"
+                      onClick={() => {
+                        const entries = Object.entries(previewWarnings)
+                        const lines = entries.map(([col, w]) => {
+                          const action = w.status === 'permission-required'
+                            ? 'Reconnect the folder in Data Upload → Local Photos.'
+                            : w.status === 'mapping-unavailable'
+                            ? 'The mapped folder is no longer accessible. Remap in Data Upload → Local Photos.'
+                            : w.status === 'file-missing'
+                            ? 'The assigned file may have been renamed or deleted.'
+                            : w.status === 'read-failed'
+                            ? 'Try refreshing or reconnecting the local folder.'
+                            : 'Check local photo settings in Data Upload → Local Photos.'
+                          return `• ${col}: ${w.reason}\n  ${action}`
+                        })
+                        toast.warning(
+                          `Local photo issue${entries.length > 1 ? 's' : ''} for ${memberDisplayName || 'this member'}`,
+                          {
+                            description: lines.join('\n\n'),
+                            duration: 10000,
+                          },
+                        )
+                      }}
+                    />
+                  }
+                >
+                  <AlertTriangleIcon className="size-3.5" />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {Object.entries(previewWarnings).map(([col, w]) => (
+                    <div key={col} className="text-xs">
+                      <span className="font-medium">{col}</span>:{' '}
+                      {w.status === 'permission-required' ? 'Permission expired'
+                        : w.status === 'mapping-unavailable' ? 'Folder inaccessible'
+                        : w.status === 'file-missing' ? 'File missing'
+                        : w.status === 'read-failed' ? 'Read failed'
+                        : w.status === 'storage-error' ? 'Storage error'
+                        : 'Unavailable'}
+                    </div>
+                  ))}
+                  <div className="text-xs text-muted mt-0.5">Click for details</div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+          </div>
+        )}
+
         <div className="flex-1" />
 
         {/* Front / Back toggle */}
@@ -642,6 +937,7 @@ export function CardDesigner({ designId }: Props) {
               members={members}
               sizeLocked={sizeLocked}
               isPanning={cursorMode !== 'default'}
+              previewImageSources={previewImageSources}
             />
           </div>
         </div>
@@ -725,4 +1021,23 @@ export function CardDesigner({ designId }: Props) {
       </div>
     </div>
   )
+}
+
+
+// ---------------------------------------------------------------------------
+// Helper: resolve a member's image URL from Firestore-backed fields
+// (mirrors the private resolveDynamicImageSrc in card-renderer.ts)
+// ---------------------------------------------------------------------------
+
+function resolveMemberImageUrl(
+  member: Pick<Member, 'profileImage' | 'signature' | 'divisionLogo' | 'fingerprint' | 'customFields'>,
+  fieldName: string,
+): string {
+  switch (fieldName) {
+    case 'profileImage': return member.profileImage ?? ''
+    case 'signature': return member.signature ?? ''
+    case 'divisionLogo': return member.divisionLogo ?? ''
+    case 'fingerprint': return member.fingerprint ?? ''
+    default: return member.customFields?.[fieldName] ?? ''
+  }
 }

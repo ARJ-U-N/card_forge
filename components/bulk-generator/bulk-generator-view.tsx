@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   CheckIcon,
@@ -50,10 +50,16 @@ import {
   downloadAllCards,
   type RenderedCard,
 } from '@/lib/card-renderer'
-import type { Design, Folder, Member } from '@/lib/models/types'
+import type { Design, Folder, Member, CardDocument } from '@/lib/models/types'
 import { getTableNameColumn, getMemberDisplayName } from '@/lib/models/types'
 import { cn } from '@/lib/utils'
 import { PrintLayoutDialog } from './print-layout-dialog'
+import {
+  createResolutionSession,
+  isResolved,
+  type ResolutionSession,
+  type PhotoResolutionResult,
+} from '@/lib/local-photos/local-photo-resolver'
 
 const ROWS_OPTIONS = [8, 12, 20, 40]
 
@@ -202,6 +208,9 @@ export function BulkGeneratorView() {
   }, [designs, isPortalUser, portalFolderId])
 
   // ── Generation ────────────────────────────────────────────────────────
+  // Ref to track the active resolution session so it can be cleaned up
+  const activeSessionRef = useRef<ResolutionSession | null>(null)
+
   const generate = useCallback(
     async (memberList: Member[]) => {
       if (!selectedDesign) {
@@ -217,12 +226,77 @@ export function BulkGeneratorView() {
       setAbortController(controller)
       setGenerating(true)
       setProgress({ current: 0, total: memberList.length })
-      setGenerationStatus('Initializing…')
+      setGenerationStatus('Resolving local photos…')
       setFailedCount(0)
 
+      // Dispose any lingering session from a previous generation
+      activeSessionRef.current?.dispose()
+      activeSessionRef.current = null
+
+      let session: ResolutionSession | null = null
+
       try {
+        // 1. Extract dynamic image column names from the selected design
+        const dynamicImageFields = extractDynamicImageFields(
+          selectedDesign.frontDocument,
+          selectedDesign.backDocument,
+        )
+
+        // 2. Resolve local photos and create render-specific member copies
+        let renderMembers: Member[]
+        if (dynamicImageFields.length > 0) {
+          session = createResolutionSession()
+          activeSessionRef.current = session
+
+          const resolved = await resolveLocalPhotosForBatch(
+            memberList,
+            dynamicImageFields,
+            session,
+            controller.signal,
+          )
+          renderMembers = resolved.renderMembers
+
+          // Report warnings for failed local assignments
+          if (resolved.warnings.length > 0 && !controller.signal.aborted) {
+            const grouped = new Map<string, string[]>()
+            for (const w of resolved.warnings) {
+              const key = w.status === 'permission-required'
+                ? 'Permission expired — reconnect in Data Upload → Local Photos'
+                : w.status === 'mapping-unavailable'
+                ? 'Mapped folder inaccessible — remap in Data Upload → Local Photos'
+                : w.status === 'file-missing'
+                ? 'Assigned file missing from local folder'
+                : w.status === 'read-failed'
+                ? 'Could not read local file'
+                : w.status === 'storage-error'
+                ? 'Local storage error'
+                : 'Local photo unavailable'
+              if (!grouped.has(key)) grouped.set(key, [])
+              grouped.get(key)!.push(`${w.memberName} (${w.fieldName})`)
+            }
+            const lines: string[] = []
+            for (const [reason, items] of grouped) {
+              lines.push(`${reason}: ${items.length > 3 ? items.slice(0, 3).join(', ') + ` +${items.length - 3} more` : items.join(', ')}`)
+            }
+            toast.warning(
+              `${resolved.warnings.length} local photo${resolved.warnings.length > 1 ? 's' : ''} could not be loaded`,
+              { description: lines.join('\n'), duration: 10000 },
+            )
+          }
+        } else {
+          renderMembers = memberList
+        }
+
+        if (controller.signal.aborted) {
+          toast.info('Generation cancelled')
+          setGenerationStatus('Cancelled')
+          return
+        }
+
+        // 3. Render cards using the (potentially overridden) member copies
+        setGenerationStatus('Generating cards…')
         const results = await renderCardsForMembers(
-          memberList,
+          renderMembers,
           selectedDesign.cardConfiguration,
           selectedDesign.frontDocument,
           selectedDesign.backDocument,
@@ -260,12 +334,26 @@ export function BulkGeneratorView() {
         })
         setGenerationStatus('Error')
       } finally {
+        // 4. Dispose the resolution session — rendered cards are self-contained
+        //    data URLs, so local blob: URLs are no longer needed.
+        session?.dispose()
+        if (activeSessionRef.current === session) {
+          activeSessionRef.current = null
+        }
         setGenerating(false)
         setAbortController(null)
       }
     },
     [selectedDesign],
   )
+
+  // Cleanup: dispose any active session on unmount
+  useEffect(() => {
+    return () => {
+      activeSessionRef.current?.dispose()
+      activeSessionRef.current = null
+    }
+  }, [])
 
   const handleCancel = () => {
     abortController?.abort()
@@ -639,4 +727,163 @@ export function BulkGeneratorView() {
       )}
     </>
   )
+}
+
+
+// ---------------------------------------------------------------------------
+// Local photo resolution helpers (module-scope, never persisted)
+// ---------------------------------------------------------------------------
+
+/** Known top-level member image fields that resolveDynamicImageSrc reads directly */
+const KNOWN_IMAGE_FIELDS = new Set(['profileImage', 'signature', 'divisionLogo', 'fingerprint'])
+
+/**
+ * Extract unique dynamic image field names from front + back design documents.
+ * Excludes QR codes and barcodes — they use text fields, not image assignments.
+ */
+function extractDynamicImageFields(
+  frontDoc: CardDocument,
+  backDoc: CardDocument,
+): string[] {
+  const fields = new Set<string>()
+  for (const el of [...frontDoc.elements, ...backDoc.elements]) {
+    if (
+      el.type === 'image' &&
+      el.props.dynamic &&
+      !el.props.qrCode &&
+      !el.props.barcode &&
+      el.props.fieldName
+    ) {
+      fields.add(el.props.fieldName as string)
+    }
+  }
+  return [...fields]
+}
+
+interface LocalPhotoWarning {
+  memberId: string
+  memberName: string
+  fieldName: string
+  status: string
+  reason: string
+}
+
+interface BatchResolutionResult {
+  /** Member copies with local photo URLs injected where resolved */
+  renderMembers: Member[]
+  /** Warnings for assignments that exist but could not be resolved */
+  warnings: LocalPhotoWarning[]
+}
+
+/**
+ * Resolve local photos for a batch of members and create render-specific copies.
+ *
+ * Groups members by (folderId, subfolderId) to use the resolver's batch API
+ * efficiently. Does not mutate the original member objects.
+ *
+ * Members without a subfolderId skip local resolution entirely (no warning).
+ */
+async function resolveLocalPhotosForBatch(
+  memberList: Member[],
+  dynamicImageFields: string[],
+  session: ResolutionSession,
+  signal?: AbortSignal,
+): Promise<BatchResolutionResult> {
+  const warnings: LocalPhotoWarning[] = []
+
+  // Map from member ID → overrides: { fieldName → localUrl }
+  const overrides = new Map<string, Record<string, string>>()
+
+  // Group members by (folderId, subfolderId) for batch resolution
+  const groups = new Map<string, { folderId: string; subfolderId: string; members: Member[] }>()
+  for (const m of memberList) {
+    if (!m.subfolderId) continue // No subfolder → skip local resolution
+    const key = `${m.folderId}::${m.subfolderId}`
+    if (!groups.has(key)) {
+      groups.set(key, { folderId: m.folderId, subfolderId: m.subfolderId, members: [] })
+    }
+    groups.get(key)!.members.push(m)
+  }
+
+  // Resolve each group × each image column
+  for (const [, group] of groups) {
+    if (signal?.aborted) break
+
+    for (const fieldName of dynamicImageFields) {
+      if (signal?.aborted) break
+
+      const memberIds = group.members.map((m) => m.id)
+
+      let results: PhotoResolutionResult[]
+      try {
+        results = await session.resolveBatch(
+          group.folderId,
+          group.subfolderId,
+          fieldName,
+          memberIds,
+        )
+      } catch {
+        // Unexpected error — skip this group/column, members fall back to Drive
+        continue
+      }
+
+      for (const result of results) {
+        if (signal?.aborted) break
+
+        if (isResolved(result)) {
+          // Local photo available — record the override
+          if (!overrides.has(result.memberId)) overrides.set(result.memberId, {})
+          overrides.get(result.memberId)![fieldName] = result.url
+        } else if (
+          result.status !== 'no-assignment'
+        ) {
+          // A confirmed assignment exists but resolution failed — record warning
+          const member = group.members.find((m) => m.id === result.memberId)
+          warnings.push({
+            memberId: result.memberId,
+            memberName: member
+              ? `${member.firstName} ${member.lastName}`.trim()
+              : result.memberId,
+            fieldName,
+            status: result.status,
+            reason: result.reason,
+          })
+        }
+        // no-assignment → silent Drive fallback
+      }
+    }
+  }
+
+  // Create render-specific copies for members that have overrides
+  const renderMembers = memberList.map((m) => {
+    const memberOverrides = overrides.get(m.id)
+    if (!memberOverrides) return m // No local photos — use original
+
+    // Shallow-copy the member, then apply overrides
+    const copy = { ...m }
+    let customFieldsModified = false
+    let customFieldsCopy: Record<string, string> | undefined
+
+    for (const [fieldName, localUrl] of Object.entries(memberOverrides)) {
+      if (KNOWN_IMAGE_FIELDS.has(fieldName)) {
+        // Override the top-level property that resolveDynamicImageSrc reads
+        ;(copy as Record<string, unknown>)[fieldName] = localUrl
+      } else {
+        // Override in customFields
+        if (!customFieldsModified) {
+          customFieldsCopy = { ...m.customFields }
+          customFieldsModified = true
+        }
+        customFieldsCopy![fieldName] = localUrl
+      }
+    }
+
+    if (customFieldsModified && customFieldsCopy) {
+      copy.customFields = customFieldsCopy
+    }
+
+    return copy
+  })
+
+  return { renderMembers, warnings }
 }

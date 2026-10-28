@@ -9,6 +9,7 @@ import {
   CheckCircleIcon,
   DownloadIcon,
   FileSpreadsheetIcon,
+  HardDriveIcon,
   ImageIcon,
   LayersIcon,
   LockIcon,
@@ -61,6 +62,7 @@ import { CreateTableDialog } from './create-table-dialog'
 import { DeleteMemberDialog } from './delete-member-dialog'
 import { MoveMemberDialog } from './move-member-dialog'
 import { BulkImageDialog } from './bulk-image-dialog'
+import { LocalFolderDialog } from './local-folder-dialog'
 
 interface Props {
   folderId: string
@@ -90,6 +92,7 @@ export function FolderDetailView({ folderId }: Props) {
   const [deleteIds, setDeleteIds] = useState<string[]>([])
   const [moveIds, setMoveIds] = useState<string[]>([])
   const [bulkImageOpen, setBulkImageOpen] = useState(false)
+  const [localFolderOpen, setLocalFolderOpen] = useState(false)
   const [submitOpen, setSubmitOpen] = useState(false)
   const [submitting, setSubmitting] = useState(false)
 
@@ -457,6 +460,29 @@ export function FolderDetailView({ folderId }: Props) {
             <LayersIcon data-icon="inline-start" />
             Bulk Images
           </Button>
+          {isOwner && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setLocalFolderOpen(true)}
+              disabled={
+                !selectedSubfolder ||
+                selectedSubfolder === '__root__' ||
+                !folder?.tableColumnTypes ||
+                Object.values(folder.tableColumnTypes).every((t) => t !== 'image')
+              }
+              title={
+                !selectedSubfolder || selectedSubfolder === '__root__'
+                  ? 'Select a subfolder first'
+                  : !folder?.tableColumnTypes || Object.values(folder.tableColumnTypes).every((t) => t !== 'image')
+                    ? 'No image columns defined'
+                    : 'Map local photo folders for this class'
+              }
+            >
+              <HardDriveIcon data-icon="inline-start" />
+              Local Photos
+            </Button>
+          )}
           <Button variant="outline" size="sm" disabled title="Coming in a later phase">
             <FileSpreadsheetIcon data-icon="inline-start" />
             Template
@@ -642,6 +668,30 @@ export function FolderDetailView({ folderId }: Props) {
         }
         collegeName={folder?.name}
       />
+
+      {/* Local Photo Folder Mapping */}
+      {selectedSubfolder && selectedSubfolder !== '__root__' && (
+        <LocalFolderDialog
+          open={localFolderOpen}
+          onOpenChange={setLocalFolderOpen}
+          folderId={folderId}
+          subfolderId={selectedSubfolder}
+          subfolderName={
+            subfolders.find((sf) => sf.id === selectedSubfolder)?.name ??
+            'Subfolder'
+          }
+          imageColumns={
+            folder?.tableColumns?.filter(
+              (col) => folder.tableColumnTypes?.[col] === 'image',
+            ) ?? []
+          }
+          members={members.filter(
+            (m) => m.subfolderId === selectedSubfolder,
+          )}
+          tableColumns={folder?.tableColumns}
+          tableNameColumn={tableNameCol}
+        />
+      )}
 
       {/* Submit / Lock confirmation */}
       <AlertDialog open={submitOpen} onOpenChange={setSubmitOpen}>

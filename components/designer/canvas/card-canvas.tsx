@@ -122,6 +122,8 @@ interface Props {
   sizeLocked?: boolean
   /** True when spacebar-pan navigation is active; suppresses element interactions */
   isPanning?: boolean
+  /** Designer-only: per-fieldName preview image URLs for the currently selected member */
+  previewImageSources?: Record<string, string>
 }
 
 export function CardCanvas({
@@ -136,6 +138,7 @@ export function CardCanvas({
   members,
   sizeLocked,
   isPanning,
+  previewImageSources,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
@@ -413,6 +416,8 @@ export function CardCanvas({
         const isQR = !!el.props.qrCode
         const isBarcode = !!el.props.barcode
         const isDynamic = !!el.props.dynamic
+        const dynamicFieldName = isDynamic && !isQR && !isBarcode ? (el.props.fieldName as string) ?? '' : ''
+        const previewSrc = dynamicFieldName ? previewImageSources?.[dynamicFieldName] : undefined
 
         // Independent corner radii (backward compatible)
         const legacyR = (borderRadius as number)
@@ -471,6 +476,9 @@ export function CardCanvas({
                 width={el.width} height={el.height}
                 needName={!!el.props.needName}
               />
+            ) : previewSrc ? (
+              <img src={previewSrc} alt="" className="size-full object-cover" draggable={false}
+                style={isPolygon ? {} : (isCircle || isOval) ? { borderRadius: '50%' } : {}} />
             ) : el.props.src && !el.props.placeholder ? (
               <img src={el.props.src as string} alt="" className="size-full object-cover" draggable={false}
                 style={isPolygon ? {} : (isCircle || isOval) ? { borderRadius: '50%' } : {}} />
