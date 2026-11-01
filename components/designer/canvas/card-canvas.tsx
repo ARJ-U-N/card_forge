@@ -101,8 +101,12 @@ interface DragState {
   elH: number
   /** True when this element is a dynamic member image with circle shape */
   isCircleDynamic: boolean
+  /** True when this element is a dynamic member image with rectangle shape */
+  isRectDynamic: boolean
   /** True when this element is a QR code (always requires square geometry) */
   isQR: boolean
+  /** Original aspect ratio (width / height) at drag start, for ratio-preserving resize */
+  aspectRatio: number
 }
 
 interface Props {
@@ -164,8 +168,10 @@ export function CardCanvas({
     onBeforeChange?.()
     onSelectElement(el.id)
     const isCD = el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
+    const isRD = el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && ((el.props.imageShape as string) === 'rectangle' || !el.props.imageShape)
     const isQR = el.type === 'image' && !!el.props.qrCode
-    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD, isQR })
+    const ar = el.height > 0 ? el.width / el.height : 1
+    setDrag({ id: el.id, mode, startMX: e.clientX, startMY: e.clientY, elX: el.x, elY: el.y, elW: el.width, elH: el.height, isCircleDynamic: isCD, isRectDynamic: isRD, isQR, aspectRatio: ar })
   }
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
@@ -175,6 +181,9 @@ export function CardCanvas({
     // Whether to constrain to 1:1 for this drag
     // QR codes always require square geometry; circle dynamic images require it when sizeLocked
     const sq = drag.isQR || !!(sizeLocked && drag.isCircleDynamic)
+    // Whether to constrain to the original aspect ratio (rectangle dynamic images)
+    const ar = !!(sizeLocked && drag.isRectDynamic)
+    const ratio = drag.aspectRatio // width / height at drag start
 
     switch (drag.mode) {
       case 'move':
@@ -186,6 +195,7 @@ export function CardCanvas({
         let newW = Math.max(10, Math.round(drag.elW + dx))
         let newH = Math.max(10, Math.round(drag.elH + dy))
         if (sq) { const s = Math.max(newW, newH); newW = s; newH = s }
+        else if (ar) { newW = Math.max(10, Math.round(drag.elW + dx)); newH = Math.max(10, Math.round(newW / ratio)) }
         // Top-left corner stays anchored (no x/y change)
         onUpdateElement(drag.id, { width: newW, height: newH })
         break
@@ -197,6 +207,10 @@ export function CardCanvas({
           const s = Math.max(newW, newH)
           // Bottom-right corner stays anchored
           onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - s), y: Math.round(drag.elY + drag.elH - s), width: s, height: s })
+        } else if (ar) {
+          newH = Math.max(10, Math.round(newW / ratio))
+          // Bottom-right corner stays anchored
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - newW), y: Math.round(drag.elY + drag.elH - newH), width: newW, height: newH })
         } else {
           onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), y: Math.round(drag.elY + dy), width: newW, height: newH })
         }
@@ -209,6 +223,10 @@ export function CardCanvas({
           const s = Math.max(newW, newH)
           // Bottom-left corner stays anchored
           onUpdateElement(drag.id, { y: Math.round(drag.elY + drag.elH - s), width: s, height: s })
+        } else if (ar) {
+          newH = Math.max(10, Math.round(newW / ratio))
+          // Bottom-left corner stays anchored
+          onUpdateElement(drag.id, { y: Math.round(drag.elY + drag.elH - newH), width: newW, height: newH })
         } else {
           onUpdateElement(drag.id, { y: Math.round(drag.elY + dy), width: newW, height: newH })
         }
@@ -221,6 +239,10 @@ export function CardCanvas({
           const s = Math.max(newW, newH)
           // Top-right corner stays anchored
           onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - s), width: s, height: s })
+        } else if (ar) {
+          newH = Math.max(10, Math.round(newW / ratio))
+          // Top-right corner stays anchored
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - newW), width: newW, height: newH })
         } else {
           onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), width: newW, height: newH })
         }
@@ -230,18 +252,20 @@ export function CardCanvas({
       // ── Side handles ────────────────────────────────────────────
       case 'resize-e': {
         const newW = Math.max(10, Math.round(drag.elW + dx))
-        onUpdateElement(drag.id, sq ? { width: newW, height: newW } : { width: newW })
+        onUpdateElement(drag.id, sq ? { width: newW, height: newW } : ar ? { width: newW, height: Math.max(10, Math.round(newW / ratio)) } : { width: newW })
         break
       }
       case 'resize-s': {
         const newH = Math.max(10, Math.round(drag.elH + dy))
-        onUpdateElement(drag.id, sq ? { width: newH, height: newH } : { height: newH })
+        onUpdateElement(drag.id, sq ? { width: newH, height: newH } : ar ? { width: Math.max(10, Math.round(newH * ratio)), height: newH } : { height: newH })
         break
       }
       case 'resize-w': {
         const newW = Math.max(10, Math.round(drag.elW - dx))
         if (sq) {
           onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - newW), width: newW, height: newW })
+        } else if (ar) {
+          onUpdateElement(drag.id, { x: Math.round(drag.elX + drag.elW - newW), width: newW, height: Math.max(10, Math.round(newW / ratio)) })
         } else {
           onUpdateElement(drag.id, { x: Math.round(drag.elX + dx), width: newW })
         }
@@ -251,6 +275,9 @@ export function CardCanvas({
         const newH = Math.max(10, Math.round(drag.elH - dy))
         if (sq) {
           onUpdateElement(drag.id, { y: Math.round(drag.elY + drag.elH - newH), width: newH, height: newH })
+        } else if (ar) {
+          const newW = Math.max(10, Math.round(newH * ratio))
+          onUpdateElement(drag.id, { y: Math.round(drag.elY + drag.elH - newH), width: newW, height: newH })
         } else {
           onUpdateElement(drag.id, { y: Math.round(drag.elY + dy), height: newH })
         }

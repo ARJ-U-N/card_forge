@@ -214,7 +214,8 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
       if (!cancelled) {
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
-        link.download = `id-cards-${new Date().toISOString().slice(0, 10)}.pdf`
+        const modePrefix = config.printMode === 'duplex' ? 'front-back-duplex' : config.printMode === 'side-by-side' ? 'front-back-side-by-side' : config.printMode
+        link.download = `${modePrefix}-id-cards-${new Date().toISOString().slice(0, 10)}.pdf`
         link.href = url
         link.click()
         URL.revokeObjectURL(url)
@@ -307,7 +308,8 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
       if (!cancelled) {
         const url = URL.createObjectURL(blob)
         const link = document.createElement('a')
-        link.download = `id-cards-vector-${new Date().toISOString().slice(0, 10)}.pdf`
+        const modePrefix = config.printMode === 'duplex' ? 'front-back-duplex' : config.printMode === 'side-by-side' ? 'front-back-side-by-side' : config.printMode
+        link.download = `${modePrefix}-id-cards-vector-${new Date().toISOString().slice(0, 10)}.pdf`
         link.href = url
         link.click()
         URL.revokeObjectURL(url)

@@ -182,34 +182,43 @@ export function CardOptionsPanel({ config, onConfigChange }: Props) {
       <Separator />
 
       {/* Safe zone — independent horizontal (X) and vertical (Y) margins */}
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium">
-            Horizontal Safe Zone X ({config.safeZoneMarginX ?? config.safeZoneMargin}mm)
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={15}
-            step={1}
-            value={config.safeZoneMarginX ?? config.safeZoneMargin}
-            onChange={(e) => update('safeZoneMarginX', Number(e.target.value))}
-            className="w-full accent-primary"
-          />
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <label className="text-xs font-medium">
-            Vertical Safe Zone Y ({config.safeZoneMarginY ?? config.safeZoneMargin}mm)
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={15}
-            step={1}
-            value={config.safeZoneMarginY ?? config.safeZoneMargin}
-            onChange={(e) => update('safeZoneMarginY', Number(e.target.value))}
-            className="w-full accent-primary"
-          />
+      <div className="flex flex-col gap-1.5">
+        <label className="text-xs font-medium">Safe Zone (mm)</label>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-muted-foreground">Horizontal X</span>
+            <Input
+              type="number"
+              min={0}
+              max={15}
+              step={1}
+              value={config.safeZoneMarginX ?? config.safeZoneMargin}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === '') return
+                const n = Number(v)
+                if (!Number.isNaN(n)) update('safeZoneMarginX', Math.min(15, Math.max(0, n)))
+              }}
+              className="h-7 text-xs"
+            />
+          </div>
+          <div className="flex flex-col gap-0.5">
+            <span className="text-[10px] text-muted-foreground">Vertical Y</span>
+            <Input
+              type="number"
+              min={0}
+              max={15}
+              step={1}
+              value={config.safeZoneMarginY ?? config.safeZoneMargin}
+              onChange={(e) => {
+                const v = e.target.value
+                if (v === '') return
+                const n = Number(v)
+                if (!Number.isNaN(n)) update('safeZoneMarginY', Math.min(15, Math.max(0, n)))
+              }}
+              className="h-7 text-xs"
+            />
+          </div>
         </div>
       </div>
 

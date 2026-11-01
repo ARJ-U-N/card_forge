@@ -122,10 +122,12 @@ export function RightPanel({
 
   // Check if selected element is a dynamic member image with circle shape
   const isCircleDynamic = el !== null && el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && (el.props.imageShape as string) === 'circle'
+  // Check if selected element is a dynamic member image with rectangle shape
+  const isRectDynamic = el !== null && el.type === 'image' && !!el.props.dynamic && !el.props.qrCode && !el.props.barcode && ((el.props.imageShape as string) === 'rectangle' || !el.props.imageShape)
   // QR codes always require square geometry
   const isQR = el !== null && el.type === 'image' && !!el.props.qrCode
 
-  // Handle width/height changes with linked mode for circle images.
+  // Handle width/height changes with linked mode for circle and rectangle images.
   // A single onUpdateElement call sets both width and height atomically,
   // preventing any recursive update loop.
   const handleSizeChange = (dimension: 'width' | 'height', value: number) => {
@@ -137,13 +139,24 @@ export function RightPanel({
     if (isQR || (sizeLocked && isCircleDynamic)) {
       // Atomic update: both dimensions set in one call — no loop
       onUpdateElement(el.id, { width: value, height: value })
+    } else if (sizeLocked && isRectDynamic) {
+      // Preserve current aspect ratio for rectangle images
+      const ratio = el.width > 0 && el.height > 0
+        ? (dimension === 'width' ? el.height / el.width : el.width / el.height)
+        : 1
+      const other = Math.max(10, Math.round(value * ratio))
+      if (dimension === 'width') {
+        onUpdateElement(el.id, { width: value, height: other })
+      } else {
+        onUpdateElement(el.id, { width: other, height: value })
+      }
     } else {
       onUpdateElement(el.id, { [dimension]: value })
     }
   }
 
-  // When toggling size link ON, equalize width/height immediately
-  // using the last-edited dimension as the source value.
+  // When toggling size link ON, equalize width/height immediately for circles,
+  // or simply lock the current ratio for rectangles (no equalization needed).
   const handleSizeLockToggle = () => {
     const next = !sizeLocked
     onSizeLockChange(next)
@@ -152,6 +165,7 @@ export function RightPanel({
       const s = lastEditedDimRef.current === 'height' ? el.height : el.width
       onUpdateElement(el.id, { width: s, height: s })
     }
+    // For rectangles, toggling on just locks the current ratio — no dimension change needed
   }
 
   // ── Stretch to Fit Card handler ──────────────────────────────────────
@@ -308,8 +322,8 @@ export function RightPanel({
                     </div>
                   ))}
                 </div>
-                {isCircleDynamic ? (
-                  /* Width/Height with linked toggle for circle dynamic images */
+                {isCircleDynamic || isRectDynamic ? (
+                  /* Width/Height with linked toggle for dynamic images */
                   <div className="flex flex-col gap-1">
                     <div className="flex items-center justify-between">
                       <label className="text-[10px] text-muted-foreground uppercase">Size</label>
@@ -322,7 +336,7 @@ export function RightPanel({
                             ? 'bg-primary/10 text-primary'
                             : 'bg-muted text-muted-foreground hover:text-foreground',
                         )}
-                        title={sizeLocked ? 'Linked — width and height change together (circle)' : 'Unlinked — width and height are independent'}
+                        title={sizeLocked ? 'Linked — width and height change together' : 'Unlinked — width and height are independent'}
                       >
                         {sizeLocked ? <Link2Icon className="size-3" /> : <Unlink2Icon className="size-3" />}
                         {sizeLocked ? 'Linked' : 'Independent'}
