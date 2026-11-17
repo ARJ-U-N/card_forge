@@ -59,6 +59,7 @@ import type { Member } from '@/lib/models/types'
 import type { MatchResult, PhotoMatch } from '@/lib/local-photos/local-photo-matcher'
 import {
   matchPhotosToMembers,
+  matchPhotosByRowNumber,
   matchLegacyByDriveMetadata,
   extractDriveFileId,
 } from '@/lib/local-photos/local-photo-matcher'
@@ -512,6 +513,84 @@ export function LocalFolderDialog({
   )
 
   // -----------------------------------------------------------------------
+  // Action: Scan & Match by Numbers (row-order matching)
+  // -----------------------------------------------------------------------
+
+  const handleScanByNumbers = useCallback(
+    async (col: string) => {
+      const state = columnStates[col]
+      if (!state?.mapping?.directoryHandle || state.status !== 'available') {
+        toast.error('Folder is not accessible. Reconnect or remap first.')
+        return
+      }
+      if (members.length === 0) {
+        toast.error('No members in this class to match against.')
+        return
+      }
+
+      // Verify members have displayOrder for reliable row ordering
+      const hasDisplayOrder = members.some((m) => m.displayOrder != null)
+      if (!hasDisplayOrder) {
+        toast.error('Member row order is not available.', {
+          description:
+            'Members need a display order (from Excel import) for numeric matching. Try re-importing.',
+        })
+        return
+      }
+
+      setScanning(true)
+
+      try {
+        // Enumerate files
+        const enumResult = await enumerateImageFiles(
+          state.mapping.directoryHandle,
+        )
+
+        if (enumResult.imageCount === 0) {
+          toast.error('No image files found in the mapped folder.', {
+            description: `Folder "${state.mapping.directoryName}" contains no recognized image files.`,
+          })
+          setScanning(false)
+          return
+        }
+
+        // Sort members by displayOrder to match Excel row sequence
+        const sortedMembers = [...members].sort((a, b) => {
+          const oa = a.displayOrder ?? Number.MAX_SAFE_INTEGER
+          const ob = b.displayOrder ?? Number.MAX_SAFE_INTEGER
+          return oa - ob
+        })
+
+        // Run the numeric row matcher
+        const result = matchPhotosByRowNumber(
+          enumResult.imageFileNames,
+          sortedMembers,
+          tableNameColumn,
+        )
+
+        setReviewState({
+          imageColumn: col,
+          nameColumnKey: tableNameColumn,
+          result,
+          dirHandle: state.mapping.directoryHandle,
+          previewUrls: {},
+        })
+        setView('review')
+      } catch (err) {
+        console.error('Scan & Match by Numbers failed:', err)
+        toast.error(
+          err instanceof Error
+            ? err.message
+            : 'Failed to scan and match photos by row number.',
+        )
+      } finally {
+        setScanning(false)
+      }
+    },
+    [columnStates, members, tableNameColumn],
+  )
+
+  // -----------------------------------------------------------------------
   // Action: Clear existing assignments
   // -----------------------------------------------------------------------
 
@@ -784,6 +863,7 @@ export function LocalFolderDialog({
             onReconnect={handleReconnect}
             onRemove={handleRemove}
             onScanAndMatch={handleScanAndMatch}
+            onScanByNumbers={handleScanByNumbers}
             onClearAssignments={handleClearAssignments}
             onClose={() => handleOpenChange(false)}
           />
@@ -821,6 +901,7 @@ function ColumnsView({
   onReconnect,
   onRemove,
   onScanAndMatch,
+  onScanByNumbers,
   onClearAssignments,
   onClose,
 }: {
@@ -834,6 +915,7 @@ function ColumnsView({
   onReconnect: (col: string) => void
   onRemove: (col: string) => void
   onScanAndMatch: (col: string) => void
+  onScanByNumbers: (col: string) => void
   onClearAssignments: (col: string) => void
   onClose: () => void
 }) {
@@ -980,6 +1062,7 @@ function ColumnsView({
                           </Button>
                         )}
                         {state.status === 'available' && (
+                          <>
                           <Button
                             variant="default"
                             size="sm"
@@ -989,6 +1072,16 @@ function ColumnsView({
                             <SearchIcon data-icon="inline-start" />
                             Scan &amp; Match
                           </Button>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => onScanByNumbers(col)}
+                            disabled={state.loading}
+                          >
+                            <HashIcon data-icon="inline-start" />
+                            Scan &amp; Match by Numbers
+                          </Button>
+                          </>
                         )}
                         <Button
                           variant="outline"

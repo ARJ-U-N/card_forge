@@ -384,8 +384,8 @@ export function CardCanvas({
           <div key={el.id} style={wrapperStyle} onMouseDown={(e) => handleMouseDown(e, el)}
             className={cn(
               'select-none overflow-hidden',
-              isSelected && 'ring-2 ring-primary ring-offset-1',
-              config.textBoundaries && !isSelected && 'border border-dashed border-muted-foreground/20',
+              isSelected && 'ring-1 ring-primary',
+              config.textBoundaries && (isSelected ? 'border border-transparent' : 'border border-dashed border-muted-foreground/20'),
             )}>
             <span style={{
               fontSize: (el.props.fontSize as number) ?? 14,
@@ -415,9 +415,9 @@ export function CardCanvas({
             className={cn(
               'select-none',
               maxVal ? 'overflow-visible' : 'overflow-hidden',
-              isSelected && 'ring-2 ring-primary ring-offset-1',
-              config.textBoundaries && !isSelected && 'border border-dashed border-blue-400/30',
-              maxVal && !isSelected && 'border border-dashed border-amber-400/50',
+              isSelected && 'ring-1 ring-primary',
+              config.textBoundaries && (isSelected ? 'border border-transparent' : 'border border-dashed border-blue-400/30'),
+              maxVal && (isSelected ? 'border border-transparent' : 'border border-dashed border-amber-400/50'),
             )}>
             <span style={{
               fontSize: (el.props.fontSize as number) ?? 14,
@@ -490,7 +490,7 @@ export function CardCanvas({
           }}
             className={cn(
               'select-none overflow-hidden',
-              isSelected && 'ring-2 ring-primary ring-offset-1',
+              isSelected && 'ring-1 ring-primary',
             )}
             onMouseDown={(e) => handleMouseDown(e, el)}>
 
@@ -565,7 +565,7 @@ export function CardCanvas({
             height: isLine ? 2 : el.height,
             borderBottom: isLine ? `2px solid ${fill}` : undefined,
           }}
-            className={cn('select-none', isSelected && 'ring-2 ring-primary ring-offset-1')}
+            className={cn('select-none', isSelected && 'ring-1 ring-primary')}
             onMouseDown={(e) => handleMouseDown(e, el)}>
             {isSelected && <ResizeHandles el={el} />}
           </div>

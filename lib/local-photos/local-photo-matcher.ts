@@ -25,7 +25,7 @@ import type { Member } from '@/lib/models/types'
 // ---------------------------------------------------------------------------
 
 /** How a match was established. */
-export type MatchMethod = 'member-id' | 'name-match' | 'drive-filename'
+export type MatchMethod = 'member-id' | 'name-match' | 'drive-filename' | 'row-number'
 
 /** A confirmed one-to-one match between a filename and a member. */
 export interface PhotoMatch {
@@ -427,3 +427,116 @@ export async function matchLegacyByDriveMetadata(
 }
 
 
+
+// ---------------------------------------------------------------------------
+// Row-number matching
+// ---------------------------------------------------------------------------
+
+/**
+ * Parse a filename that consists of a pure numeric stem and a supported
+ * image extension, e.g. `1.png`, `12.jpg`, `003.jpeg`.
+ *
+ * Returns the 1-based row number, or null if the filename does not match.
+ * Only pure-numeric stems are accepted — `arjun1.png` returns null.
+ */
+function parseNumericFilename(filename: string): number | null {
+  const dot = filename.lastIndexOf('.')
+  if (dot <= 0) return null
+  const stem = filename.slice(0, dot)
+  if (!/^\d+$/.test(stem)) return null
+  const num = parseInt(stem, 10)
+  if (num <= 0 || !Number.isFinite(num)) return null
+  return num
+}
+
+/**
+ * Match numbered photo filenames to members by their Excel/display-order
+ * position. Members must have a `displayOrder` field that preserves the
+ * original Excel import row sequence.
+ *
+ * @param filenames       Array of image filenames from the local directory.
+ * @param members         Array of Member records for the class, sorted by
+ *                        displayOrder (the caller is responsible for sorting).
+ * @param nameColumnKey   The customFields key for the name column (for
+ *                        display in the review UI).
+ */
+export function matchPhotosByRowNumber(
+  filenames: string[],
+  members: Member[],
+  nameColumnKey: string | undefined,
+): MatchResult {
+  // --- Build a map of row number → filenames (to detect duplicates) ---
+  const numberToFiles = new Map<number, string[]>()
+  const nonNumericFiles: string[] = []
+
+  for (const filename of filenames) {
+    const num = parseNumericFilename(filename)
+    if (num === null) {
+      nonNumericFiles.push(filename)
+      continue
+    }
+    const existing = numberToFiles.get(num)
+    if (existing) {
+      existing.push(filename)
+    } else {
+      numberToFiles.set(num, [filename])
+    }
+  }
+
+  // --- Match by 1-based row position ---
+  const matches: PhotoMatch[] = []
+  const ambiguous: AmbiguousMatch[] = []
+  const missingMembers: Array<{ memberId: string; memberName: string }> = []
+  const duplicateFiles: Array<{ memberId: string; filenames: string[] }> = []
+  const matchedNumbers = new Set<number>()
+
+  for (let i = 0; i < members.length; i++) {
+    const member = members[i]
+    const rowNumber = i + 1 // 1-based
+    const name = nameColumnKey
+      ? member.customFields?.[nameColumnKey] ?? ''
+      : `${member.firstName} ${member.lastName}`.trim()
+
+    const fileList = numberToFiles.get(rowNumber)
+
+    if (!fileList || fileList.length === 0) {
+      // Missing number
+      missingMembers.push({ memberId: member.id, memberName: name || '(unnamed)' })
+      continue
+    }
+
+    matchedNumbers.add(rowNumber)
+
+    if (fileList.length > 1) {
+      // Duplicate numbered files for this row
+      ambiguous.push({
+        filename: fileList.join(', '),
+        candidateMemberIds: [member.id],
+        reason: 'multiple-files-for-member',
+      })
+      duplicateFiles.push({ memberId: member.id, filenames: [...fileList] })
+    } else {
+      matches.push({
+        filename: fileList[0],
+        memberId: member.id,
+        method: 'row-number',
+      })
+    }
+  }
+
+  // --- Extra numbered files beyond the member count ---
+  const unmatchedFiles: string[] = [...nonNumericFiles]
+  for (const [num, fileList] of numberToFiles) {
+    if (!matchedNumbers.has(num)) {
+      unmatchedFiles.push(...fileList)
+    }
+  }
+
+  return {
+    matches,
+    ambiguous,
+    missingMembers,
+    unmatchedFiles,
+    duplicateFiles,
+  }
+}

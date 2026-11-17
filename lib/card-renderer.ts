@@ -165,6 +165,7 @@ async function renderSide(
   cardDoc: CardDocument,
   config: CardConfiguration,
   member: Member,
+  isPortal = false,
 ): Promise<HTMLCanvasElement> {
   const { w: baseW, h: baseH } = cardPixelSize(config)
   const isVertical = config.orientation === 'vertical'
@@ -464,6 +465,11 @@ async function renderSide(
     ctx.globalAlpha = 1
   }
 
+  // Portal watermark overlay
+  if (isPortal) {
+    drawWatermark(ctx, w, h)
+  }
+
   return canvas
 }
 
@@ -533,6 +539,43 @@ export function clearImageCache() {
 }
 
 // ---------------------------------------------------------------------------
+// Watermark -- repeating diagonal "CARDForge (C)" for portal exports
+// ---------------------------------------------------------------------------
+
+function drawWatermark(ctx: CanvasRenderingContext2D, w: number, h: number) {
+  ctx.save()
+  ctx.globalAlpha = 0.13
+  ctx.font = 'bold 14px Inter, Helvetica, Arial, sans-serif'
+  ctx.fillStyle = '#888888'
+  ctx.textAlign = 'center'
+  ctx.textBaseline = 'middle'
+
+  const text = 'CARDForge \u00A9'
+  const angle = -30 * (Math.PI / 180)
+  const spacingX = 120
+  const spacingY = 50
+
+  // Cover the entire card with generous overflow to handle rotation clipping
+  const diag = Math.sqrt(w * w + h * h)
+  const startX = -diag / 2
+  const startY = -diag / 2
+  const endX = w + diag / 2
+  const endY = h + diag / 2
+
+  for (let y = startY; y < endY; y += spacingY) {
+    for (let x = startX; x < endX; x += spacingX) {
+      ctx.save()
+      ctx.translate(x, y)
+      ctx.rotate(angle)
+      ctx.fillText(text, 0, 0)
+      ctx.restore()
+    }
+  }
+
+  ctx.restore()
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -568,13 +611,14 @@ async function renderWithRetry(
   config: CardConfiguration,
   frontDoc: CardDocument,
   backDoc: CardDocument,
+  isPortal = false,
 ): Promise<RenderedCard> {
   let lastError: Error | null = null
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      const frontCanvas = await renderSide(frontDoc, config, member)
-      const backCanvas = await renderSide(backDoc, config, member)
+      const frontCanvas = await renderSide(frontDoc, config, member, isPortal)
+      const backCanvas = await renderSide(backDoc, config, member, isPortal)
 
       const frontDataUrl = frontCanvas.toDataURL('image/png')
       const backDataUrl = backCanvas.toDataURL('image/png')
@@ -613,8 +657,9 @@ export async function renderCardForMember(
   config: CardConfiguration,
   frontDoc: CardDocument,
   backDoc: CardDocument,
+  isPortal = false,
 ): Promise<RenderedCard> {
-  return renderWithRetry(member, config, frontDoc, backDoc)
+  return renderWithRetry(member, config, frontDoc, backDoc, isPortal)
 }
 
 export interface RenderBatchResult {
@@ -632,6 +677,7 @@ export async function renderCardsForMembers(
   backDoc: CardDocument,
   onProgress?: (completed: number, total: number) => void,
   signal?: AbortSignal,
+  isPortal = false,
 ): Promise<RenderedCard[]> {
   const results: RenderedCard[] = []
   for (let i = 0; i < members.length; i++) {
@@ -639,7 +685,7 @@ export async function renderCardsForMembers(
     if (signal?.aborted) {
       break
     }
-    const card = await renderWithRetry(members[i], config, frontDoc, backDoc)
+    const card = await renderWithRetry(members[i], config, frontDoc, backDoc, isPortal)
     results.push(card)
     onProgress?.(i + 1, members.length)
     // Yield to main thread every 3 cards to avoid freezing

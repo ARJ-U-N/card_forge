@@ -305,6 +305,7 @@ export function BulkGeneratorView() {
             setGenerationStatus(`Generating card ${current} of ${total}…`)
           },
           controller.signal,
+          isPortalUser,
         )
 
         if (controller.signal.aborted) {
@@ -344,7 +345,7 @@ export function BulkGeneratorView() {
         setAbortController(null)
       }
     },
-    [selectedDesign],
+    [selectedDesign, isPortalUser],
   )
 
   // Cleanup: dispose any active session on unmount
@@ -471,6 +472,7 @@ export function BulkGeneratorView() {
               cardHeightMm={selectedDesign.cardConfiguration.cardHeightMm}
               design={selectedDesign}
               members={generatedMembers}
+              isPortal={isPortalUser}
               trigger={
                 <Button variant="outline" size="sm">
                   <PrinterIcon data-icon="inline-start" />

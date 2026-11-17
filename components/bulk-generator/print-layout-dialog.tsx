@@ -84,12 +84,14 @@ interface Props {
   design?: import('@/lib/models/types').Design | null
   /** Member data — required for vector PDF export */
   members?: import('@/lib/models/types').Member[]
+  /** When true, overlay a repeating copyright watermark on vector PDF cards */
+  isPortal?: boolean
 }
 
 // Page dimensions for preview scaling
 const PREVIEW_HEIGHT = 500
 
-export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHeightMm, trigger, design, members }: Props) {
+export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHeightMm, trigger, design, members, isPortal }: Props) {
   const { user } = useAuth()
   const workspaceId = user?.workspaceId ?? ''
 
@@ -303,6 +305,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
         onProgress: (c, t, s) => {
           setExportProgress({ current: c, total: t, status: s })
         },
+        isPortal,
       })
 
       if (!cancelled) {
@@ -326,7 +329,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
       session?.dispose()
       setExporting(false)
     }
-  }, [design, members, config, totalPages, cancelled, cards])
+  }, [design, members, config, totalPages, cancelled, cards, isPortal])
 
   // ── Export images ─────────────────────────────────────────────────────
   const handleExportImages = useCallback(async (format: 'png' | 'jpeg') => {

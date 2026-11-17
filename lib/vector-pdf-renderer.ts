@@ -1179,6 +1179,45 @@ function distributeCardsForVector(
 }
 
 // ---------------------------------------------------------------------------
+// Watermark — repeating diagonal "CARDForge ©" for portal exports (vector)
+// ---------------------------------------------------------------------------
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function drawVectorWatermark(
+  pdf: any,
+  x: number,
+  y: number,
+  wMm: number,
+  hMm: number,
+) {
+  const text = 'CARDForge \u00A9'
+  const angle = -30 // degrees
+  const spacingXmm = 32
+  const spacingYmm = 13
+  const fontSizePt = 9
+
+  pdf.saveGraphicsState()
+  pdf.setGState(pdf.GState({ opacity: 0.13 }))
+  pdf.setFont('helvetica', 'bold')
+  pdf.setFontSize(fontSizePt)
+  pdf.setTextColor(136, 136, 136)
+
+  const diag = Math.sqrt(wMm * wMm + hMm * hMm)
+  const startX = -diag / 2
+  const startY = -diag / 2
+  const endX = wMm + diag / 2
+  const endY = hMm + diag / 2
+
+  for (let dy = startY; dy < endY; dy += spacingYmm) {
+    for (let dx = startX; dx < endX; dx += spacingXmm) {
+      pdf.text(text, x + dx, y + dy, { angle })
+    }
+  }
+
+  pdf.restoreGraphicsState()
+}
+
+// ---------------------------------------------------------------------------
 // Main vector PDF export function
 // ---------------------------------------------------------------------------
 
@@ -1189,10 +1228,12 @@ export interface VectorPDFInput {
   /** Existing RenderedCard[] — only used as fallback reference, NOT for vector rendering */
   renderedCards?: RenderedCard[]
   onProgress?: (current: number, total: number, status: string) => void
+  /** When true, overlay a repeating copyright watermark on every card */
+  isPortal?: boolean
 }
 
 export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
-  const { design, members, config, onProgress } = input
+  const { design, members, config, onProgress, isPortal } = input
   const { default: jsPDF } = await import('jspdf')
 
   const cardConfig = design.cardConfiguration
@@ -1389,6 +1430,11 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
         false, // never per-card rotation — page-level /Rotate handles it
       )
 
+      // Portal watermark overlay
+      if (isPortal) {
+        drawVectorWatermark(pdf as any, drawX, drawY, slot.w, slot.h)
+      }
+
       // Card borders
       if (config.cardBorders) {
         drawCardBorder(pdf as any, drawX, drawY, slot.w, slot.h)
@@ -1422,6 +1468,11 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
             slot.h,
             false, // never per-card rotation
           )
+
+          // Portal watermark overlay (back side-by-side)
+          if (isPortal) {
+            drawVectorWatermark(pdf as any, backX, backY, slot.w, slot.h)
+          }
 
           if (config.cardBorders) {
             drawCardBorder(pdf as any, backX, backY, slot.w, slot.h)

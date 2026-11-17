@@ -34,7 +34,7 @@ export interface LocalFolderMapping {
 }
 
 /** How a photo was matched to a member. */
-export type AssignmentMatchMethod = 'member-id' | 'name-match' | 'drive-filename'
+export type AssignmentMatchMethod = 'member-id' | 'name-match' | 'drive-filename' | 'row-number'
 
 /**
  * A confirmed photo assignment: one local file → one member,

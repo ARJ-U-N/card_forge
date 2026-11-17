@@ -460,7 +460,7 @@ export function FolderDetailView({ folderId }: Props) {
             <LayersIcon data-icon="inline-start" />
             Bulk Images
           </Button>
-          {isOwner && (
+          {(isOwner || isPortalUser) && (
             <Button
               variant="outline"
               size="sm"
