@@ -17,6 +17,18 @@ import {
   Unlink2Icon,
   UnlockIcon,
   UploadIcon,
+  AlignStartVerticalIcon,
+  AlignCenterVerticalIcon,
+  AlignEndVerticalIcon,
+  AlignStartHorizontalIcon,
+  AlignCenterHorizontalIcon,
+  AlignEndHorizontalIcon,
+  AlignHorizontalSpaceBetweenIcon,
+  AlignVerticalSpaceBetweenIcon,
+  UngroupIcon,
+  FolderOpenIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -65,6 +77,17 @@ interface Props {
   sizeLocked: boolean
   /** Callback to toggle sizeLocked */
   onSizeLockChange: (locked: boolean) => void
+  selectedGroupId?: string | null
+  onSelectGroup?: (gId: string | null) => void
+  onUngroup?: (gId: string) => void
+  onDeleteGroup?: (gId: string) => void
+  onDuplicateGroup?: (gId: string) => void
+  onGroupAlign?: (gId: string, action: string) => void
+  onGroupSpacing?: (gId: string, axis: 'horizontal' | 'vertical', gap: number) => void
+  onSetGroupPosition?: (gId: string, x: number, y: number) => void
+  onResizeGroup?: (gId: string, w: number, h: number) => void
+  onToggleGroupLock?: (gId: string) => void
+  getGroupBounds?: (gId: string) => { x: number; y: number; w: number; h: number } | null
 }
 
 type RightTab = 'customize' | 'layers'
@@ -101,9 +124,23 @@ export function RightPanel({
   onToggleMaxLengthPreview,
   sizeLocked,
   onSizeLockChange,
+  selectedGroupId,
+  onSelectGroup,
+  onUngroup,
+  onDeleteGroup,
+  onDuplicateGroup,
+  onGroupAlign,
+  onGroupSpacing,
+  onSetGroupPosition,
+  onResizeGroup,
+  onToggleGroupLock,
+  getGroupBounds,
 }: Props) {
   const [activeTab, setActiveTab] = useState<RightTab>('customize')
   const [radiusLocked, setRadiusLocked] = useState(true)
+  const [vGap, setVGap] = useState(10)
+  const [hGap, setHGap] = useState(10)
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   // Track which dimension was last edited (for equalize-on-link-ON)
   const lastEditedDimRef = useRef<'width' | 'height'>('width')
   const [customFonts, setCustomFonts] = useState<string[]>([])
@@ -114,6 +151,13 @@ export function RightPanel({
     : null
 
   const sortedElements = [...activeDoc.elements].sort((a, b) => b.zIndex - a.zIndex)
+
+  // Group helpers
+  const groupMembers = selectedGroupId
+    ? activeDoc.elements.filter((e) => e.groupId === selectedGroupId)
+    : []
+  const groupBounds = selectedGroupId ? getGroupBounds?.(selectedGroupId) ?? null : null
+  const allGroups = [...new Set(activeDoc.elements.filter((e) => e.groupId).map((e) => e.groupId!))]
 
   const updateProp = (key: string, value: unknown) => {
     if (!el) return
@@ -434,7 +478,7 @@ export function RightPanel({
                                 <SelectItem key={f.key} value={f.key}>{f.label}</SelectItem>
                               ))}
                               {/* Show current value if it's a custom field */}
-                              {el.props.fieldName && !DYNAMIC_FIELDS.some((f) => f.key === el.props.fieldName) && (
+                              {(el.props.fieldName as string) && !DYNAMIC_FIELDS.some((f) => f.key === el.props.fieldName) && (
                                 <SelectItem value={el.props.fieldName as string}>Custom: {el.props.fieldName as string}</SelectItem>
                               )}
                             </SelectContent>
@@ -522,7 +566,7 @@ export function RightPanel({
                         className="hidden"
                         onChange={handleFontImport}
                       />
-                      {el.props.customFontName && (
+                      {(el.props.customFontName as string) && (
                         <span className="text-[9px] text-muted-foreground truncate">
                           Using: {String(el.props.customFontName)}
                         </span>
@@ -853,6 +897,124 @@ export function RightPanel({
                   </Button>
                 </div>
               </>
+            ) : selectedGroupId && groupBounds ? (
+              /* ── GROUP CONTROLS ────────────────────────────── */
+              <>
+                <h4 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  Group ({groupMembers.length} elements)
+                </h4>
+
+                {/* Position & Size */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] text-muted-foreground uppercase">X</label>
+                    <Input type="number" value={Math.round(groupBounds.x)} className="h-7 text-xs"
+                      onChange={(e) => onSetGroupPosition?.(selectedGroupId, Number(e.target.value), groupBounds.y)} />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] text-muted-foreground uppercase">Y</label>
+                    <Input type="number" value={Math.round(groupBounds.y)} className="h-7 text-xs"
+                      onChange={(e) => onSetGroupPosition?.(selectedGroupId, groupBounds.x, Number(e.target.value))} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] text-muted-foreground uppercase">W</label>
+                    <Input type="number" value={Math.round(groupBounds.w)} className="h-7 text-xs" min={10}
+                      onChange={(e) => onResizeGroup?.(selectedGroupId, Number(e.target.value), groupBounds.h)} />
+                  </div>
+                  <div className="flex flex-col gap-0.5">
+                    <label className="text-[10px] text-muted-foreground uppercase">H</label>
+                    <Input type="number" value={Math.round(groupBounds.h)} className="h-7 text-xs" min={10}
+                      onChange={(e) => onResizeGroup?.(selectedGroupId, groupBounds.w, Number(e.target.value))} />
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Align Elements */}
+                <h4 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  Align Elements
+                </h4>
+                <div className="flex gap-1">
+                  <Button variant="outline" size="icon-xs" title="Align Left" onClick={() => onGroupAlign?.(selectedGroupId, 'left')}>
+                    <AlignStartVerticalIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Align Center" onClick={() => onGroupAlign?.(selectedGroupId, 'center-h')}>
+                    <AlignCenterVerticalIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Align Right" onClick={() => onGroupAlign?.(selectedGroupId, 'right')}>
+                    <AlignEndVerticalIcon className="size-3.5" />
+                  </Button>
+                  <div className="w-px bg-border mx-0.5" />
+                  <Button variant="outline" size="icon-xs" title="Align Top" onClick={() => onGroupAlign?.(selectedGroupId, 'top')}>
+                    <AlignStartHorizontalIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Align Middle" onClick={() => onGroupAlign?.(selectedGroupId, 'middle')}>
+                    <AlignCenterHorizontalIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Align Bottom" onClick={() => onGroupAlign?.(selectedGroupId, 'bottom')}>
+                    <AlignEndHorizontalIcon className="size-3.5" />
+                  </Button>
+                </div>
+                <div className="flex gap-1">
+                  <Button variant="outline" size="xs" className="flex-1" title="Distribute Horizontally" onClick={() => onGroupAlign?.(selectedGroupId, 'distribute-h')}>
+                    <AlignHorizontalSpaceBetweenIcon className="size-3 mr-1" /> Distribute H
+                  </Button>
+                  <Button variant="outline" size="xs" className="flex-1" title="Distribute Vertically" onClick={() => onGroupAlign?.(selectedGroupId, 'distribute-v')}>
+                    <AlignVerticalSpaceBetweenIcon className="size-3 mr-1" /> Distribute V
+                  </Button>
+                </div>
+                <div className="flex gap-1">
+                  <Button variant="outline" size="xs" className="flex-1" onClick={() => onGroupAlign?.(selectedGroupId, 'match-width')}>
+                    Match W
+                  </Button>
+                  <Button variant="outline" size="xs" className="flex-1" onClick={() => onGroupAlign?.(selectedGroupId, 'match-height')}>
+                    Match H
+                  </Button>
+                </div>
+
+                <Separator />
+
+                {/* Spacing */}
+                <h4 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  Spacing
+                </h4>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-[10px] text-muted-foreground w-7 shrink-0">V Gap</label>
+                  <Input type="number" value={vGap} className="h-7 text-xs flex-1" min={0}
+                    onChange={(e) => setVGap(Number(e.target.value))} />
+                  <Button variant="outline" size="xs" onClick={() => onGroupSpacing?.(selectedGroupId, 'vertical', vGap)}>
+                    Apply
+                  </Button>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <label className="text-[10px] text-muted-foreground w-7 shrink-0">H Gap</label>
+                  <Input type="number" value={hGap} className="h-7 text-xs flex-1" min={0}
+                    onChange={(e) => setHGap(Number(e.target.value))} />
+                  <Button variant="outline" size="xs" onClick={() => onGroupSpacing?.(selectedGroupId, 'horizontal', hGap)}>
+                    Apply
+                  </Button>
+                </div>
+
+                <Separator />
+
+                {/* Group Actions */}
+                <div className="flex gap-1.5">
+                  <Button variant="outline" size="xs" className="flex-1" onClick={() => onToggleGroupLock?.(selectedGroupId)}>
+                    {groupMembers.every((e) => e.locked) ? <><LockIcon className="size-3" /> Locked</> : <><UnlockIcon className="size-3" /> Lock</>}
+                  </Button>
+                  <Button variant="outline" size="xs" className="flex-1" onClick={() => onDuplicateGroup?.(selectedGroupId)}>
+                    <CopyIcon className="size-3" /> Duplicate
+                  </Button>
+                  <Button variant="destructive" size="xs" className="flex-1" onClick={() => onDeleteGroup?.(selectedGroupId)}>
+                    <Trash2Icon className="size-3" /> Delete
+                  </Button>
+                </div>
+                <Button variant="outline" size="xs" className="w-full" onClick={() => onUngroup?.(selectedGroupId)}>
+                  <UngroupIcon className="size-3.5 mr-1" /> Ungroup
+                </Button>
+              </>
             ) : (
               <p className="py-6 text-center text-xs text-muted-foreground">
                 Select an element on the canvas to view and edit its properties.
@@ -871,55 +1033,103 @@ export function RightPanel({
               <p className="py-6 text-center text-xs text-muted-foreground">
                 No elements on this side yet.
               </p>
-            ) : (
-              sortedElements.map((item) => {
-                const label =
-                  item.type === 'text'
-                    ? ((item.props.text as string) ?? 'Text').slice(0, 18)
-                    : item.type === 'field'
-                      ? `⚡ ${item.props.fieldName}`
-                      : item.type === 'image'
-                        ? item.props.qrCode
-                          ? '▦ QR Code'
-                          : item.props.barcode
-                            ? '║ Barcode'
-                            : item.props.dynamic
-                              ? `📷 ${item.props.fieldName}`
-                              : '🖼 Image'
-                        : `◆ ${(item.props.shape as string) ?? 'Shape'}`
+            ) : (() => {
+              const ungrouped = sortedElements.filter((e) => !e.groupId)
+              const getLabel = (item: typeof sortedElements[0]) =>
+                item.type === 'text'
+                  ? ((item.props.text as string) ?? 'Text').slice(0, 18)
+                  : item.type === 'field'
+                    ? '⚡ ' + (item.props.fieldName as string)
+                    : item.type === 'image'
+                      ? item.props.qrCode
+                        ? '▦ QR Code'
+                        : item.props.barcode
+                          ? '║ Barcode'
+                          : item.props.dynamic
+                            ? '📷 ' + (item.props.fieldName as string)
+                            : '🖼 Image'
+                      : '◆ ' + ((item.props.shape as string) ?? 'Shape')
 
-                return (
-                  <div
-                    key={item.id}
-                    className={cn(
-                      'group flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors',
-                      selectedElementId === item.id
-                        ? 'bg-primary/10 text-primary'
-                        : 'text-muted-foreground hover:bg-muted hover:text-foreground',
-                    )}
-                  >
-                    <button type="button" onClick={() => onSelectElement(item.id)} className="flex flex-1 items-center gap-1.5 text-left truncate">
-                      <GripVerticalIcon className="size-3 shrink-0 opacity-30" />
-                      <span className="truncate">{label}</span>
+              const renderLayerItem = (item: typeof sortedElements[0], indent = false) => (
+                <div
+                  key={item.id}
+                  className={cn(
+                    'group flex items-center gap-1 rounded-md py-1 text-xs transition-colors',
+                    indent ? 'pl-5 pr-1.5' : 'px-1.5',
+                    selectedElementId === item.id
+                      ? 'bg-primary/10 text-primary'
+                      : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  )}
+                >
+                  <button type="button" onClick={() => { onSelectElement(item.id); onSelectGroup?.(null) }} className="flex flex-1 items-center gap-1.5 text-left truncate">
+                    <GripVerticalIcon className="size-3 shrink-0 opacity-30" />
+                    <span className="truncate">{getLabel(item)}</span>
+                  </button>
+                  <div className="flex items-center gap-px opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button type="button" onClick={() => onReorderElement(item.id, 'up')} className="p-0.5 hover:text-foreground" title="Move up">
+                      <ArrowUpIcon className="size-3" />
                     </button>
-                    <div className="flex items-center gap-px opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button type="button" onClick={() => onReorderElement(item.id, 'up')} className="p-0.5 hover:text-foreground" title="Move up">
-                        <ArrowUpIcon className="size-3" />
-                      </button>
-                      <button type="button" onClick={() => onReorderElement(item.id, 'down')} className="p-0.5 hover:text-foreground" title="Move down">
-                        <ArrowDownIcon className="size-3" />
-                      </button>
-                      <button type="button" onClick={() => onUpdateElement(item.id, { visible: !item.visible })} className="p-0.5 hover:text-foreground">
-                        {item.visible ? <EyeIcon className="size-3" /> : <EyeOffIcon className="size-3" />}
-                      </button>
-                      <button type="button" onClick={() => onUpdateElement(item.id, { locked: !item.locked })} className="p-0.5 hover:text-foreground">
-                        {item.locked ? <LockIcon className="size-3" /> : <UnlockIcon className="size-3" />}
-                      </button>
-                    </div>
+                    <button type="button" onClick={() => onReorderElement(item.id, 'down')} className="p-0.5 hover:text-foreground" title="Move down">
+                      <ArrowDownIcon className="size-3" />
+                    </button>
+                    <button type="button" onClick={() => onUpdateElement(item.id, { visible: !item.visible })} className="p-0.5 hover:text-foreground">
+                      {item.visible ? <EyeIcon className="size-3" /> : <EyeOffIcon className="size-3" />}
+                    </button>
+                    <button type="button" onClick={() => onUpdateElement(item.id, { locked: !item.locked })} className="p-0.5 hover:text-foreground">
+                      {item.locked ? <LockIcon className="size-3" /> : <UnlockIcon className="size-3" />}
+                    </button>
                   </div>
-                )
-              })
-            )}
+                </div>
+              )
+
+              return (
+                <>
+                  {/* Groups */}
+                  {allGroups.map((gId) => {
+                    const members = sortedElements.filter((e) => e.groupId === gId)
+                    if (members.length === 0) return null
+                    const isExpanded = expandedGroups.has(gId)
+                    const isGrpSelected = selectedGroupId === gId
+                    return (
+                      <div key={gId}>
+                        <div
+                          className={cn(
+                            'group flex items-center gap-1 rounded-md px-1.5 py-1 text-xs transition-colors',
+                            isGrpSelected
+                              ? 'bg-primary/10 text-primary font-medium'
+                              : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                          )}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setExpandedGroups((prev) => { const n = new Set(prev); if (n.has(gId)) n.delete(gId); else n.add(gId); return n })}
+                            className="p-0.5"
+                          >
+                            {isExpanded ? <ChevronDownIcon className="size-3" /> : <ChevronRightIcon className="size-3" />}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { onSelectGroup?.(gId); onSelectElement(null) }}
+                            className="flex flex-1 items-center gap-1.5 text-left truncate"
+                          >
+                            <FolderOpenIcon className="size-3 shrink-0" />
+                            <span className="truncate">Group ({members.length})</span>
+                          </button>
+                          <div className="flex items-center gap-px opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button type="button" onClick={() => onUngroup?.(gId)} className="p-0.5 hover:text-foreground" title="Ungroup">
+                              <UngroupIcon className="size-3" />
+                            </button>
+                          </div>
+                        </div>
+                        {isExpanded && members.map((m) => renderLayerItem(m, true))}
+                      </div>
+                    )
+                  })}
+                  {/* Ungrouped elements */}
+                  {ungrouped.map((item) => renderLayerItem(item))}
+                </>
+              )
+            })()}
           </div>
         )}
       </div>

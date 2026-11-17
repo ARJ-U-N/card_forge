@@ -128,6 +128,18 @@ interface Props {
   isPanning?: boolean
   /** Designer-only: per-fieldName preview image URLs for the currently selected member */
   previewImageSources?: Record<string, string>
+  /** Group selection mode active */
+  groupMode?: boolean
+  /** Element IDs pending group creation */
+  groupPendingIds?: Set<string>
+  /** Toggle an element's pending-group membership */
+  onGroupPendingToggle?: (id: string) => void
+  /** Currently selected group ID */
+  selectedGroupId?: string | null
+  /** Select/deselect a group */
+  onSelectGroup?: (gId: string | null) => void
+  /** Move all elements in a group by delta */
+  onMoveGroup?: (gId: string, dx: number, dy: number) => void
 }
 
 export function CardCanvas({
@@ -143,9 +155,16 @@ export function CardCanvas({
   sizeLocked,
   isPanning,
   previewImageSources,
+  groupMode,
+  groupPendingIds,
+  onGroupPendingToggle,
+  selectedGroupId,
+  onSelectGroup,
+  onMoveGroup,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [drag, setDrag] = useState<DragState | null>(null)
+  const groupDragRef = useRef<{ gId: string; startMX: number; startMY: number; lastDX: number; lastDY: number } | null>(null)
 
   const { w: baseW, h: baseH } = cardPixelSize(config)
   const isVertical = config.orientation === 'vertical'
@@ -162,6 +181,23 @@ export function CardCanvas({
   // ── Drag mechanics ────────────────────────────────────────────────────
   const handleMouseDown = (e: React.MouseEvent, el: CanvasElement, mode: DragMode = 'move') => {
     if (isPanning) return // Let event bubble to workspace for pan handling
+    // Group selection mode: toggle pending membership instead of dragging
+    if (groupMode) {
+      e.stopPropagation()
+      e.preventDefault()
+      onGroupPendingToggle?.(el.id)
+      return
+    }
+    // Click on a grouped element: select the group instead
+    if (el.groupId && mode === 'move') {
+      e.stopPropagation()
+      e.preventDefault()
+      onSelectGroup?.(el.groupId)
+      onSelectElement(null)
+      // Start group drag
+      groupDragRef.current = { gId: el.groupId, startMX: e.clientX, startMY: e.clientY, lastDX: 0, lastDY: 0 }
+      return
+    }
     if (el.locked) return
     e.stopPropagation()
     e.preventDefault()
@@ -298,6 +334,32 @@ export function CardCanvas({
     }
   }, [drag, handleMouseMove, handleMouseUp])
 
+  // ── Group drag effect ──────────────────────────────────────────────────
+  useEffect(() => {
+    const handleGroupMouseMove = (e: MouseEvent) => {
+      const gd = groupDragRef.current
+      if (!gd) return
+      const dx = (e.clientX - gd.startMX) / scale
+      const dy = (e.clientY - gd.startMY) / scale
+      const ddx = dx - gd.lastDX
+      const ddy = dy - gd.lastDY
+      if (Math.abs(ddx) > 0.5 || Math.abs(ddy) > 0.5) {
+        onMoveGroup?.(gd.gId, Math.round(ddx), Math.round(ddy))
+        gd.lastDX = dx
+        gd.lastDY = dy
+      }
+    }
+    const handleGroupMouseUp = () => {
+      groupDragRef.current = null
+    }
+    window.addEventListener('mousemove', handleGroupMouseMove)
+    window.addEventListener('mouseup', handleGroupMouseUp)
+    return () => {
+      window.removeEventListener('mousemove', handleGroupMouseMove)
+      window.removeEventListener('mouseup', handleGroupMouseUp)
+    }
+  }, [scale, onMoveGroup])
+
   // ── Resize handles ────────────────────────────────────────────────────
   const ResizeHandles = ({ el }: { el: CanvasElement }) => {
     if (el.locked) return null
@@ -363,6 +425,8 @@ export function CardCanvas({
     if (!el.visible) return null
     const isSelected = selectedElementId === el.id
     const opacity = (el.props.opacity as number) ?? 1
+    const isGroupPending = groupMode && groupPendingIds?.has(el.id)
+    const isInSelectedGroup = !!selectedGroupId && el.groupId === selectedGroupId
 
     const wrapperStyle: React.CSSProperties = {
       position: 'absolute',
@@ -385,6 +449,8 @@ export function CardCanvas({
             className={cn(
               'select-none overflow-hidden',
               isSelected && 'ring-1 ring-primary',
+              isGroupPending && 'ring-2 ring-green-500',
+              isInSelectedGroup && 'ring-1 ring-primary/50',
               config.textBoundaries && (isSelected ? 'border border-transparent' : 'border border-dashed border-muted-foreground/20'),
             )}>
             <span style={{
@@ -416,6 +482,8 @@ export function CardCanvas({
               'select-none',
               maxVal ? 'overflow-visible' : 'overflow-hidden',
               isSelected && 'ring-1 ring-primary',
+              isGroupPending && 'ring-2 ring-green-500',
+              isInSelectedGroup && 'ring-1 ring-primary/50',
               config.textBoundaries && (isSelected ? 'border border-transparent' : 'border border-dashed border-blue-400/30'),
               maxVal && (isSelected ? 'border border-transparent' : 'border border-dashed border-amber-400/50'),
             )}>
@@ -491,6 +559,8 @@ export function CardCanvas({
             className={cn(
               'select-none overflow-hidden',
               isSelected && 'ring-1 ring-primary',
+              isGroupPending && 'ring-2 ring-green-500',
+              isInSelectedGroup && 'ring-1 ring-primary/50',
             )}
             onMouseDown={(e) => handleMouseDown(e, el)}>
 
@@ -565,7 +635,7 @@ export function CardCanvas({
             height: isLine ? 2 : el.height,
             borderBottom: isLine ? `2px solid ${fill}` : undefined,
           }}
-            className={cn('select-none', isSelected && 'ring-1 ring-primary')}
+            className={cn('select-none', isSelected && 'ring-1 ring-primary', isGroupPending && 'ring-2 ring-green-500', isInSelectedGroup && 'ring-1 ring-primary/50')}
             onMouseDown={(e) => handleMouseDown(e, el)}>
             {isSelected && <ResizeHandles el={el} />}
           </div>
@@ -605,7 +675,7 @@ export function CardCanvas({
             height: cardH * scale,
             background: doc.background || config.frontBackground,
           }}
-          onClick={(e) => { if (!isPanning && e.target === e.currentTarget) onSelectElement(null) }}
+          onClick={(e) => { if (!isPanning && e.target === e.currentTarget) { onSelectElement(null); onSelectGroup?.(null) } }}
         >
           <div className="absolute inset-0 origin-top-left" style={{ transform: `scale(${scale})`, width: cardW, height: cardH }}>
             {/* Slot punch */}
@@ -622,6 +692,31 @@ export function CardCanvas({
               <div className="absolute border border-dashed border-red-400/50 pointer-events-none"
                 style={{ top: safeZoneY, left: safeZoneX, width: cardW - safeZoneX * 2, height: cardH - safeZoneY * 2, zIndex: 9999 }} />
             )}
+
+            {/* Group bounding box overlay — inside scaled div, same coordinate space as elements */}
+            {selectedGroupId && (() => {
+              const groupEls = doc.elements.filter((e) => e.groupId === selectedGroupId)
+              if (groupEls.length === 0) return null
+              let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity
+              for (const ge of groupEls) {
+                gMinX = Math.min(gMinX, ge.x)
+                gMinY = Math.min(gMinY, ge.y)
+                gMaxX = Math.max(gMaxX, ge.x + ge.width)
+                gMaxY = Math.max(gMaxY, ge.y + ge.height)
+              }
+              return (
+                <div
+                  className="absolute pointer-events-none border-2 border-dashed border-primary/60 rounded"
+                  style={{
+                    left: gMinX,
+                    top: gMinY,
+                    width: gMaxX - gMinX,
+                    height: gMaxY - gMinY,
+                    zIndex: 9998,
+                  }}
+                />
+              )
+            })()}
           </div>
         </div>
       </div>

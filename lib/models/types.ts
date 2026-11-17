@@ -278,6 +278,8 @@ export interface CanvasElement {
   locked: boolean
   visible: boolean
   zIndex: number
+  /** Optional group membership — elements sharing the same groupId belong to one group. */
+  groupId?: string
 }
 
 /** The serialised state of one side of a card. */

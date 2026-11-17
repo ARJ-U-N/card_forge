@@ -9,6 +9,7 @@ import {
   ChevronLeftIcon,
   ChevronRightIcon,
   EyeIcon,
+  GroupIcon,
   RefreshCwIcon,
   SaveIcon,
   UsersIcon,
@@ -76,6 +77,11 @@ export function CardDesigner({ designId }: Props) {
 
   // ── Linked Width/Height — editing aid for circle dynamic images (never persisted) ──
   const [sizeLocked, setSizeLocked] = useState(true)
+
+  // ── Grouping — Designer-only transient state (never persisted separately) ──
+  const [groupMode, setGroupMode] = useState(false)
+  const [groupPendingIds, setGroupPendingIds] = useState<Set<string>>(new Set())
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
 
   // ── Member Photo Preview — transient preview state (never persisted) ──
   const [previewMemberId, setPreviewMemberId] = useState<string | null>(null)
@@ -669,6 +675,321 @@ export function CardDesigner({ designId }: Props) {
     [activeSide, pushUndo],
   )
 
+  // ── Group operations ─────────────────────────────────────────────────
+
+  /** Compute bounding box of elements sharing a groupId */
+  const getGroupBounds = useCallback(
+    (gId: string) => {
+      const doc = activeSide === 'front' ? frontDocRef.current : backDocRef.current
+      const els = doc.elements.filter((e) => e.groupId === gId)
+      if (els.length === 0) return null
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const e of els) {
+        minX = Math.min(minX, e.x)
+        minY = Math.min(minY, e.y)
+        maxX = Math.max(maxX, e.x + e.width)
+        maxY = Math.max(maxY, e.y + e.height)
+      }
+      return { x: minX, y: minY, w: maxX - minX, h: maxY - minY }
+    },
+    [activeSide],
+  )
+
+  /** Toggle group selection mode or finalize group creation */
+  const handleGroupToggle = useCallback(() => {
+    if (!groupMode) {
+      // Enter group selection mode
+      setGroupMode(true)
+      setGroupPendingIds(new Set())
+      setSelectedElementId(null)
+      setSelectedGroupId(null)
+      return
+    }
+    // Finalize: create group from pending selection
+    if (groupPendingIds.size < 2) {
+      toast.info('Select at least 2 elements to create a group')
+      setGroupMode(false)
+      setGroupPendingIds(new Set())
+      return
+    }
+    pushUndo()
+    const gId = `grp-${Date.now()}`
+    setActiveDoc((prev) => ({
+      ...prev,
+      elements: prev.elements.map((el) =>
+        groupPendingIds.has(el.id) ? { ...el, groupId: gId } : el,
+      ),
+    }))
+    setGroupMode(false)
+    setGroupPendingIds(new Set())
+    setSelectedGroupId(gId)
+    setSelectedElementId(null)
+  }, [groupMode, groupPendingIds, pushUndo, activeSide])
+
+  /** Toggle an element in/out of the pending group selection */
+  const handleGroupPendingToggle = useCallback(
+    (id: string) => {
+      setGroupPendingIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(id)) next.delete(id)
+        else next.add(id)
+        return next
+      })
+    },
+    [],
+  )
+
+  /** Ungroup all elements in a group */
+  const handleUngroup = useCallback(
+    (gId: string) => {
+      pushUndo()
+      setActiveDoc((prev) => ({
+        ...prev,
+        elements: prev.elements.map((el) =>
+          el.groupId === gId ? { ...el, groupId: undefined } : el,
+        ),
+      }))
+      setSelectedGroupId(null)
+    },
+    [activeSide, pushUndo],
+  )
+
+  /** Delete an entire group */
+  const handleDeleteGroup = useCallback(
+    (gId: string) => {
+      pushUndo()
+      setActiveDoc((prev) => ({
+        ...prev,
+        elements: prev.elements.filter((el) => el.groupId !== gId),
+      }))
+      setSelectedGroupId(null)
+    },
+    [activeSide, pushUndo],
+  )
+
+  /** Duplicate an entire group */
+  const handleDuplicateGroup = useCallback(
+    (gId: string) => {
+      pushUndo()
+      const newGId = `grp-${Date.now()}`
+      setActiveDoc((prev) => {
+        const members = prev.elements.filter((el) => el.groupId === gId)
+        const clones = members.map((el, i) => ({
+          ...el,
+          id: `dup-${Date.now()}-${++_dupCounter}-${i}`,
+          groupId: newGId,
+          x: el.x + 15,
+          y: el.y + 15,
+          zIndex: prev.elements.length + i + 1,
+          props: { ...el.props },
+        }))
+        return { ...prev, elements: [...prev.elements, ...clones] }
+      })
+      setSelectedGroupId(newGId)
+    },
+    [activeSide, pushUndo],
+  )
+
+  /** Move all group members by a delta */
+  const handleMoveGroup = useCallback(
+    (gId: string, dx: number, dy: number) => {
+      setActiveDoc((prev) => ({
+        ...prev,
+        elements: prev.elements.map((el) =>
+          el.groupId === gId ? { ...el, x: el.x + dx, y: el.y + dy } : el,
+        ),
+      }))
+    },
+    [activeSide],
+  )
+
+  /** Update group position (absolute) — repositions all children relative to new origin */
+  const handleSetGroupPosition = useCallback(
+    (gId: string, newX: number, newY: number) => {
+      const bounds = getGroupBounds(gId)
+      if (!bounds) return
+      const dx = newX - bounds.x
+      const dy = newY - bounds.y
+      handleMoveGroup(gId, dx, dy)
+    },
+    [getGroupBounds, handleMoveGroup],
+  )
+
+  /** Resize group proportionally */
+  const handleResizeGroup = useCallback(
+    (gId: string, newW: number, newH: number) => {
+      const bounds = getGroupBounds(gId)
+      if (!bounds || bounds.w === 0 || bounds.h === 0) return
+      const sx = newW / bounds.w
+      const sy = newH / bounds.h
+      setActiveDoc((prev) => ({
+        ...prev,
+        elements: prev.elements.map((el) => {
+          if (el.groupId !== gId) return el
+          return {
+            ...el,
+            x: Math.round(bounds.x + (el.x - bounds.x) * sx),
+            y: Math.round(bounds.y + (el.y - bounds.y) * sy),
+            width: Math.max(10, Math.round(el.width * sx)),
+            height: Math.max(10, Math.round(el.height * sy)),
+          }
+        }),
+      }))
+    },
+    [activeSide, getGroupBounds],
+  )
+
+  /** Lock / unlock all group members */
+  const handleToggleGroupLock = useCallback(
+    (gId: string) => {
+      const doc = activeSide === 'front' ? frontDocRef.current : backDocRef.current
+      const members = doc.elements.filter((e) => e.groupId === gId)
+      const anyUnlocked = members.some((e) => !e.locked)
+      pushUndo()
+      setActiveDoc((prev) => ({
+        ...prev,
+        elements: prev.elements.map((el) =>
+          el.groupId === gId ? { ...el, locked: anyUnlocked } : el,
+        ),
+      }))
+    },
+    [activeSide, pushUndo],
+  )
+
+  // ── Group alignment & spacing helpers ──────────────────────────────────
+
+  const handleGroupAlign = useCallback(
+    (gId: string, action: string) => {
+      pushUndo()
+      setActiveDoc((prev) => {
+        const els = prev.elements.filter((e) => e.groupId === gId)
+        if (els.length < 2) return prev
+        const updates = new Map<string, Partial<CanvasElement>>()
+
+        switch (action) {
+          case 'left': {
+            const minX = Math.min(...els.map((e) => e.x))
+            els.forEach((e) => updates.set(e.id, { x: minX }))
+            break
+          }
+          case 'center-h': {
+            const minX = Math.min(...els.map((e) => e.x))
+            const maxR = Math.max(...els.map((e) => e.x + e.width))
+            const cx = (minX + maxR) / 2
+            els.forEach((e) => updates.set(e.id, { x: Math.round(cx - e.width / 2) }))
+            break
+          }
+          case 'right': {
+            const maxR = Math.max(...els.map((e) => e.x + e.width))
+            els.forEach((e) => updates.set(e.id, { x: maxR - e.width }))
+            break
+          }
+          case 'top': {
+            const minY = Math.min(...els.map((e) => e.y))
+            els.forEach((e) => updates.set(e.id, { y: minY }))
+            break
+          }
+          case 'middle': {
+            const minY = Math.min(...els.map((e) => e.y))
+            const maxB = Math.max(...els.map((e) => e.y + e.height))
+            const cy = (minY + maxB) / 2
+            els.forEach((e) => updates.set(e.id, { y: Math.round(cy - e.height / 2) }))
+            break
+          }
+          case 'bottom': {
+            const maxB = Math.max(...els.map((e) => e.y + e.height))
+            els.forEach((e) => updates.set(e.id, { y: maxB - e.height }))
+            break
+          }
+          case 'distribute-h': {
+            if (els.length < 3) break
+            const sorted = [...els].sort((a, b) => a.x - b.x)
+            const first = sorted[0], last = sorted[sorted.length - 1]
+            const totalW = sorted.reduce((s, e) => s + e.width, 0)
+            const totalSpace = (last.x + last.width) - first.x - totalW
+            const gap = totalSpace / (sorted.length - 1)
+            let curX = first.x + first.width + gap
+            for (let i = 1; i < sorted.length - 1; i++) {
+              updates.set(sorted[i].id, { x: Math.round(curX) })
+              curX += sorted[i].width + gap
+            }
+            break
+          }
+          case 'distribute-v': {
+            if (els.length < 3) break
+            const sorted = [...els].sort((a, b) => a.y - b.y)
+            const first = sorted[0], last = sorted[sorted.length - 1]
+            const totalH = sorted.reduce((s, e) => s + e.height, 0)
+            const totalSpace = (last.y + last.height) - first.y - totalH
+            const gap = totalSpace / (sorted.length - 1)
+            let curY = first.y + first.height + gap
+            for (let i = 1; i < sorted.length - 1; i++) {
+              updates.set(sorted[i].id, { y: Math.round(curY) })
+              curY += sorted[i].height + gap
+            }
+            break
+          }
+          case 'match-width': {
+            const maxW = Math.max(...els.map((e) => e.width))
+            els.forEach((e) => updates.set(e.id, { width: maxW }))
+            break
+          }
+          case 'match-height': {
+            const maxH = Math.max(...els.map((e) => e.height))
+            els.forEach((e) => updates.set(e.id, { height: maxH }))
+            break
+          }
+        }
+
+        if (updates.size === 0) return prev
+        return {
+          ...prev,
+          elements: prev.elements.map((el) => {
+            const u = updates.get(el.id)
+            return u ? { ...el, ...u } : el
+          }),
+        }
+      })
+    },
+    [pushUndo, activeSide],
+  )
+
+  /** Set a fixed gap between elements in a group */
+  const handleGroupSpacing = useCallback(
+    (gId: string, axis: 'horizontal' | 'vertical', gap: number) => {
+      pushUndo()
+      setActiveDoc((prev) => {
+        const els = prev.elements.filter((e) => e.groupId === gId)
+        if (els.length < 2) return prev
+        const updates = new Map<string, Partial<CanvasElement>>()
+        if (axis === 'vertical') {
+          const sorted = [...els].sort((a, b) => a.y - b.y)
+          let curY = sorted[0].y + sorted[0].height + gap
+          for (let i = 1; i < sorted.length; i++) {
+            updates.set(sorted[i].id, { y: Math.round(curY) })
+            curY += sorted[i].height + gap
+          }
+        } else {
+          const sorted = [...els].sort((a, b) => a.x - b.x)
+          let curX = sorted[0].x + sorted[0].width + gap
+          for (let i = 1; i < sorted.length; i++) {
+            updates.set(sorted[i].id, { x: Math.round(curX) })
+            curX += sorted[i].width + gap
+          }
+        }
+        return {
+          ...prev,
+          elements: prev.elements.map((el) => {
+            const u = updates.get(el.id)
+            return u ? { ...el, ...u } : el
+          }),
+        }
+      })
+    },
+    [pushUndo, activeSide],
+  )
+
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -699,7 +1020,7 @@ export function CardDesigner({ designId }: Props) {
         if (el?.locked) return
         handleDeleteElement(selectedElementId)
       }
-      if (e.key === 'Escape') setSelectedElementId(null)
+      if (e.key === 'Escape') { setSelectedElementId(null); setSelectedGroupId(null); if (groupMode) { setGroupMode(false); setGroupPendingIds(new Set()) } }
       if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
         e.preventDefault()
         handleDuplicateElement(selectedElementId)
@@ -707,7 +1028,7 @@ export function CardDesigner({ designId }: Props) {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedElementId, handleDeleteElement, handleDuplicateElement, activeDoc, undo, redo])
+  }, [selectedElementId, handleDeleteElement, handleDuplicateElement, activeDoc, undo, redo, groupMode])
 
   // ── Loading / Not found ───────────────────────────────────────────────
   if (loading) {
@@ -868,7 +1189,7 @@ export function CardDesigner({ designId }: Props) {
             <button
               key={side}
               type="button"
-              onClick={() => { setActiveSide(side); setSelectedElementId(null) }}
+              onClick={() => { setActiveSide(side); setSelectedElementId(null); setSelectedGroupId(null); setGroupMode(false); setGroupPendingIds(new Set()) }}
               className={`rounded-md px-3 py-1 text-xs font-medium capitalize transition-colors ${activeSide === side
                 ? 'bg-background text-foreground shadow-sm'
                 : 'text-muted-foreground hover:text-foreground'
@@ -879,7 +1200,18 @@ export function CardDesigner({ designId }: Props) {
           ))}
         </div>
 
-        {/* Zoom */}
+        {/* Group */}
+        <Button
+          variant={groupMode ? 'default' : 'outline'}
+          size="sm"
+          onClick={handleGroupToggle}
+          title={groupMode ? 'Click elements then click again to finish grouping' : 'Group elements'}
+        >
+          <GroupIcon className="size-3.5 mr-1" />
+          {groupMode ? `Group (${groupPendingIds.size})` : 'Group'}
+        </Button>
+
+                {/* Zoom */}
         <div className="flex items-center gap-0.5 rounded-lg border px-1">
           <Button variant="ghost" size="icon-xs" onClick={handleZoomOut}><ZoomOutIcon /></Button>
           <button type="button" className="min-w-[4ch] text-center text-xs tabular-nums" onClick={() => setZoom(100)}>
@@ -938,6 +1270,12 @@ export function CardDesigner({ designId }: Props) {
               sizeLocked={sizeLocked}
               isPanning={cursorMode !== 'default'}
               previewImageSources={previewImageSources}
+              groupMode={groupMode}
+              groupPendingIds={groupPendingIds}
+              onGroupPendingToggle={handleGroupPendingToggle}
+              selectedGroupId={selectedGroupId}
+              onSelectGroup={setSelectedGroupId}
+              onMoveGroup={handleMoveGroup}
             />
           </div>
         </div>
@@ -1017,6 +1355,17 @@ export function CardDesigner({ designId }: Props) {
           }}
           sizeLocked={sizeLocked}
           onSizeLockChange={setSizeLocked}
+          selectedGroupId={selectedGroupId}
+          onSelectGroup={setSelectedGroupId}
+          onUngroup={handleUngroup}
+          onDeleteGroup={handleDeleteGroup}
+          onDuplicateGroup={handleDuplicateGroup}
+          onGroupAlign={handleGroupAlign}
+          onGroupSpacing={handleGroupSpacing}
+          onSetGroupPosition={handleSetGroupPosition}
+          onResizeGroup={handleResizeGroup}
+          onToggleGroupLock={handleToggleGroupLock}
+          getGroupBounds={getGroupBounds}
         />
       </div>
     </div>
