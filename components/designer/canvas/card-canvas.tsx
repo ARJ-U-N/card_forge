@@ -9,6 +9,7 @@ import type {
   Member,
 } from '@/lib/models/types'
 import { resolveDynamicText } from '@/lib/card-renderer'
+import { BARCODE_MARGIN_PX, BARCODE_BAR_WIDTH, barcodeBarHeight } from '@/lib/barcode-layout'
 
 // CR-80 defaults (pixels): 324 × 204
 const DEFAULT_CARD_W = 324
@@ -557,7 +558,8 @@ export function CardCanvas({
             ...(isPolygon ? { clipPath: cssPolygon(sides!) } : {}),
           }}
             className={cn(
-              'select-none overflow-hidden',
+              'select-none',
+              (isBarcode && !!el.props.needName) ? 'overflow-visible' : 'overflow-hidden',
               isSelected && 'ring-1 ring-primary',
               isGroupPending && 'ring-2 ring-green-500',
               isInSelectedGroup && 'ring-1 ring-primary/50',
@@ -782,10 +784,10 @@ function BarcodePreview({ fieldName, format, width, height, needName }: { fieldN
       try {
         JsBarcode.default(svgRef.current, `{${fieldName}}`, {
           format: format as string,
-          width: 1.5,
-          height: Math.max(20, needName ? height - 24 : height - 16),
+          width: BARCODE_BAR_WIDTH,
+          height: barcodeBarHeight(height),
           displayValue: false,
-          margin: 2,
+          margin: BARCODE_MARGIN_PX,
           background: '#ffffff',
         })
       } catch {
@@ -795,10 +797,10 @@ function BarcodePreview({ fieldName, format, width, height, needName }: { fieldN
   }, [fieldName, format, width, height, needName])
 
   return (
-    <div className="flex size-full flex-col items-center bg-white">
-      <svg ref={svgRef} className={needName ? 'flex-1' : 'size-full'} />
+    <div className="relative flex size-full flex-col items-center bg-white">
+      <svg ref={svgRef} className="size-full" />
       {needName && (
-        <div className="w-full text-center text-[8px] leading-tight text-black pb-0.5 truncate px-1">
+        <div className="absolute top-full left-0 w-full bg-white text-center text-[8px] leading-tight text-black truncate px-1 py-0.5">
           {fieldName}
         </div>
       )}

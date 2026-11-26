@@ -1239,6 +1239,7 @@ export function CardDesigner({ designId }: Props) {
       {/* ── Three-column editor ──────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">
         <LeftPanel
+          workspaceId={workspaceId}
           config={config}
           onConfigChange={setConfig}
           activeDoc={activeDoc}

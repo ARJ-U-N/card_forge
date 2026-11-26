@@ -9,6 +9,13 @@ import type {
   CardDocument,
   Member,
 } from '@/lib/models/types'
+import {
+  BARCODE_MARGIN_PX,
+  BARCODE_BAR_WIDTH,
+  BARCODE_NAME_BG_HEIGHT_MM,
+  BARCODE_LABEL_FONT_SIZE_PX,
+  barcodeBarHeight,
+} from '@/lib/barcode-layout'
 
 // ---------------------------------------------------------------------------
 // Custom font registry — loaded on-demand and cached for the session
@@ -138,17 +145,16 @@ async function generateBarcodeDataUrl(
   format: string,
   width: number,
   height: number,
-  needName = false,
 ): Promise<string> {
   try {
     const JsBarcode = await import('jsbarcode')
     const canvas = document.createElement('canvas')
     JsBarcode.default(canvas, text || '0000', {
       format,
-      width: 1.5,
-      height: Math.max(20, needName ? height - 18 : height - 10),
+      width: BARCODE_BAR_WIDTH,
+      height: barcodeBarHeight(height),
       displayValue: false,
-      margin: 2,
+      margin: BARCODE_MARGIN_PX,
     })
     return canvas.toDataURL('image/png')
   } catch {
@@ -341,7 +347,7 @@ async function renderSide(
           const fieldName = (el.props.fieldName as string) ?? 'employeeId'
           const bcText = resolveDynamicText(member, fieldName)
           const format = (el.props.barcodeFormat as string) ?? 'CODE128'
-          imgSrc = await generateBarcodeDataUrl(bcText, format, el.width, el.height, !!el.props.needName)
+          imgSrc = await generateBarcodeDataUrl(bcText, format, el.width, el.height)
         } else if (el.props.dynamic) {
           const fieldName = (el.props.fieldName as string) ?? 'profileImage'
           imgSrc = resolveDynamicImageSrc(member, fieldName)
@@ -389,10 +395,8 @@ async function renderSide(
           }
         }
 
-        // Draw image with clip — when needName is ON, shrink the barcode
-        // area to leave room for the heading label below the bars.
-        const labelReserve = (el.props.barcode && el.props.needName) ? 16 : 0
-        const imgDrawH = el.height - labelReserve
+        // Draw image with clip — barcode always uses the full element area
+        // (JsBarcode includes its own margins in the generated canvas).
         if (imgSrc) {
           const img = await loadImage(imgSrc)
           if (img) {
@@ -401,21 +405,28 @@ async function renderSide(
               applyClip()
               ctx.clip()
             }
-            ctx.drawImage(img, el.x, el.y, el.width, imgDrawH)
+            ctx.drawImage(img, el.x, el.y, el.width, el.height)
             ctx.restore()
           }
         }
 
+        // The rect is flush with the barcode container's bottom edge, same width.
         if (el.props.barcode && el.props.needName) {
           const label = (el.props.fieldName as string) ?? ''
           if (label) {
+            const nameBgHeightPx = BARCODE_NAME_BG_HEIGHT_MM * PX_PER_MM
+            // White background rectangle — zero gap, same width as barcode container
+            ctx.save()
+            ctx.fillStyle = '#ffffff'
+            ctx.fillRect(el.x, el.y + el.height, el.width, nameBgHeightPx)
+            ctx.restore()
+            // Center the label text inside the white rectangle
             ctx.save()
             ctx.fillStyle = '#000000'
-            ctx.font = '10px sans-serif'
+            ctx.font = `${BARCODE_LABEL_FONT_SIZE_PX}px sans-serif`
             ctx.textAlign = 'center'
-            ctx.textBaseline = 'top'
-            // Draw the heading label in the reserved area below the bars
-            ctx.fillText(label, el.x + el.width / 2, el.y + imgDrawH + 2)
+            ctx.textBaseline = 'middle'
+            ctx.fillText(label, el.x + el.width / 2, el.y + el.height + nameBgHeightPx / 2)
             ctx.restore()
           }
         }

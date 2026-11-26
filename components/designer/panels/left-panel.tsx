@@ -15,6 +15,16 @@ import {
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog'
+import { toast } from 'sonner'
+import { isPdf, isTiff, loadPdf, convertTiff } from '@/lib/file-converters'
+import { storage } from '@/lib/storage'
 import type {
   CanvasElement,
   CardConfiguration,
@@ -50,6 +60,7 @@ export const DYNAMIC_IMAGE_FIELDS = [
 ] as const
 
 interface Props {
+  workspaceId: string
   config: CardConfiguration
   onConfigChange: (config: CardConfiguration) => void
   activeDoc: CardDocument
@@ -79,6 +90,7 @@ function nextId(prefix: string) {
 }
 
 export function LeftPanel({
+  workspaceId,
   config,
   onConfigChange,
   activeDoc,
@@ -90,6 +102,13 @@ export function LeftPanel({
 }: Props) {
   const [activeTab, setActiveTab] = useState<TabId>('options')
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [pdfPageDialog, setPdfPageDialog] = useState<{
+    numPages: number
+    renderPage: (page: number) => Promise<string>
+  } | null>(null)
+  const [converting, setConverting] = useState(false)
+  /** Holds the pending original-file upload promise for multi-page PDF dialog */
+  const pendingOriginalUploadRef = useRef<Promise<{ url: string; mimeType: string; fileName: string } | null>>(Promise.resolve(null))
 
   const nextZ = activeDoc.elements.length + 1
 
@@ -161,26 +180,124 @@ export function LeftPanel({
     })
   }
 
-  const handleUploadImage = (e: React.ChangeEvent<HTMLInputElement>) => {
+  /** Upload the original file to Google Drive for preservation */
+  const uploadOriginalFile = async (file: File): Promise<{ url: string; mimeType: string; fileName: string } | null> => {
+    if (!workspaceId) return null
+    try {
+      const result = await storage.upload(workspaceId, file, 'backgrounds')
+      return { url: result.url, mimeType: file.type || result.mimeType, fileName: file.name }
+    } catch (err) {
+      console.warn('Failed to upload original background file:', err)
+      toast.warning('Original file could not be preserved', {
+        description: 'The preview was saved, but the original file could not be uploaded to storage.',
+      })
+      return null
+    }
+  }
+
+  /** Add a converted image (data URL) as a static image element */
+  const addImageFromDataUrl = (
+    dataUrl: string,
+    originalInfo?: { url: string; mimeType: string; fileName: string; pdfPage?: number } | null,
+  ) => {
+    const imgProps: Record<string, unknown> = {
+      src: dataUrl, placeholder: false,
+      opacity: 1, borderSize: 0, borderColor: '#000000', borderRadius: 0,
+    }
+    if (originalInfo) {
+      imgProps.originalSrc = originalInfo.url
+      imgProps.originalMimeType = originalInfo.mimeType
+      imgProps.originalFileName = originalInfo.fileName
+      if (originalInfo.pdfPage !== undefined) {
+        imgProps.originalPdfPage = originalInfo.pdfPage
+      }
+    }
+    onAddElement({
+      id: nextId('uimg'),
+      type: 'image',
+      x: 40, y: 40,
+      width: 100, height: 100,
+      rotation: 0,
+      props: imgProps,
+      locked: false, visible: true, zIndex: nextZ,
+    })
+  }
+
+  const handleUploadImage = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
-    const reader = new FileReader()
-    reader.onloadend = () => {
-      onAddElement({
-        id: nextId('uimg'),
-        type: 'image',
-        x: 40, y: 40,
-        width: 100, height: 100,
-        rotation: 0,
-        props: {
-          src: reader.result as string, placeholder: false,
-          opacity: 1, borderSize: 0, borderColor: '#000000', borderRadius: 0,
-        },
-        locked: false, visible: true, zIndex: nextZ,
-      })
-    }
-    reader.readAsDataURL(file)
     e.target.value = ''
+
+    // ── PDF ──────────────────────────────────────────────────────────
+    if (isPdf(file)) {
+      try {
+        setConverting(true)
+        // Start original file upload in parallel with PDF loading
+        const originalUpload = uploadOriginalFile(file)
+        const pdfInfo = await loadPdf(file)
+        if (pdfInfo.numPages === 1) {
+          // Single page — convert and await upload in parallel
+          const [dataUrl, originalInfo] = await Promise.all([
+            pdfInfo.renderPage(1),
+            originalUpload,
+          ])
+          addImageFromDataUrl(dataUrl, originalInfo ? { ...originalInfo, pdfPage: 0 } : null)
+        } else {
+          // Multiple pages — store upload promise for the page-select dialog
+          pendingOriginalUploadRef.current = originalUpload
+          setPdfPageDialog(pdfInfo)
+        }
+      } catch (err) {
+        console.error('PDF conversion error:', err)
+        toast.error('Failed to load PDF', {
+          description: 'The file may be corrupted or password-protected.',
+        })
+      } finally {
+        setConverting(false)
+      }
+      return
+    }
+
+    // ── TIFF/TIF ────────────────────────────────────────────────────
+    if (isTiff(file)) {
+      try {
+        setConverting(true)
+        // Convert to PNG and upload original in parallel
+        const [dataUrl, originalInfo] = await Promise.all([
+          convertTiff(file),
+          uploadOriginalFile(file),
+        ])
+        addImageFromDataUrl(dataUrl, originalInfo)
+      } catch (err) {
+        console.error('TIFF conversion error:', err)
+        toast.error('Failed to load TIFF image', {
+          description: 'The file may be corrupted or in an unsupported TIFF format.',
+        })
+      } finally {
+        setConverting(false)
+      }
+      return
+    }
+
+    // ── Standard image formats (JPG, PNG, WEBP, etc.) ───────────────
+    setConverting(true)
+    try {
+      const [dataUrl, originalInfo] = await Promise.all([
+        new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onloadend = () => resolve(reader.result as string)
+          reader.onerror = () => reject(new Error('Failed to read file'))
+          reader.readAsDataURL(file)
+        }),
+        uploadOriginalFile(file),
+      ])
+      addImageFromDataUrl(dataUrl, originalInfo)
+    } catch (err) {
+      console.error('Image upload error:', err)
+      toast.error('Failed to load image')
+    } finally {
+      setConverting(false)
+    }
   }
 
   const addQRCode = (fieldName = 'employeeId') => {
@@ -374,14 +491,14 @@ export function LeftPanel({
             <div className="flex flex-col gap-1.5">
               <button type="button" onClick={() => fileInputRef.current?.click()}
                 className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors">
-                <ImageIcon className="size-3.5" /> Upload Image
+                <ImageIcon className="size-3.5" /> Upload Image / PDF
               </button>
               <button type="button" onClick={addImagePlaceholder}
                 className="flex items-center gap-2 rounded-lg border border-dashed p-2.5 text-xs text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors">
                 <PlusIcon className="size-3.5" /> Image Placeholder
               </button>
             </div>
-            <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleUploadImage} />
+            <input ref={fileInputRef} type="file" accept="image/*,.pdf,.tif,.tiff" className="hidden" onChange={handleUploadImage} />
 
             <Separator />
 
@@ -560,6 +677,53 @@ export function LeftPanel({
           </div>
         )}
       </div>
+
+      {/* Converting indicator */}
+      {converting && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
+          <div className="rounded-lg bg-background p-4 shadow-lg text-sm text-muted-foreground">
+            Converting file…
+          </div>
+        </div>
+      )}
+
+      {/* PDF page selector dialog */}
+      <Dialog open={!!pdfPageDialog} onOpenChange={(open) => { if (!open) setPdfPageDialog(null) }}>
+        <DialogContent className="sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Select PDF Page</DialogTitle>
+            <DialogDescription>
+              This PDF has {pdfPageDialog?.numPages ?? 0} pages. Choose which page to use as a background image.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid grid-cols-4 gap-2 max-h-60 overflow-y-auto py-2">
+            {pdfPageDialog && Array.from({ length: pdfPageDialog.numPages }, (_, i) => i + 1).map((page) => (
+              <button
+                key={page}
+                type="button"
+                onClick={async () => {
+                  try {
+                    setConverting(true)
+                    setPdfPageDialog(null)
+                    const [dataUrl, originalInfo] = await Promise.all([
+                      pdfPageDialog.renderPage(page),
+                      pendingOriginalUploadRef.current,
+                    ])
+                    addImageFromDataUrl(dataUrl, originalInfo ? { ...originalInfo, pdfPage: page - 1 } : null)
+                  } catch {
+                    toast.error('Failed to render PDF page')
+                  } finally {
+                    setConverting(false)
+                  }
+                }}
+                className="flex items-center justify-center rounded border p-3 text-xs hover:border-primary hover:text-primary transition-colors"
+              >
+                Page {page}
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

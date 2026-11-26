@@ -28,6 +28,14 @@ import {
   type LayoutMode,
 } from '@/lib/print-layout'
 import type { RenderedCard } from '@/lib/card-renderer'
+import {
+  BARCODE_MARGIN_PX,
+  BARCODE_BAR_WIDTH,
+  BARCODE_NAME_BG_HEIGHT_MM,
+  BARCODE_LABEL_FONT_SIZE_PT,
+  PX_PER_MM as BARCODE_PX_PER_MM,
+  barcodeBarHeight,
+} from '@/lib/barcode-layout'
 
 // ---------------------------------------------------------------------------
 // Coordinate conversion
@@ -131,6 +139,132 @@ async function loadImageAsDataUrl(src: string): Promise<string | null> {
 }
 
 // ---------------------------------------------------------------------------
+// Original background image loader (Phase 2)
+//
+// For Static Images backgrounds that have an originalSrc (uploaded to Google
+// Drive in Phase 1), fetch the original file and return it as a data URL that
+// preserves its native format and resolution.
+//
+// - JPEG/PNG: fetched and converted to data URL without re-encoding through
+//   canvas, preserving original pixel data and quality.
+// - TIFF: decoded at full original resolution using utif2, then converted to
+//   PNG data URL.
+// - PDF: not handled here (uses existing preview fallback).
+//
+// Results are cached in _imgCache using the originalSrc URL as key, so each
+// unique background is fetched only once per session regardless of how many
+// cards reference it.
+// ---------------------------------------------------------------------------
+
+/** Detected format for addImage: 'JPEG' | 'PNG' */
+interface OriginalImageResult {
+  dataUrl: string
+  format: 'JPEG' | 'PNG'
+}
+
+async function loadOriginalBackgroundAsDataUrl(
+  originalSrc: string,
+  originalMimeType: string,
+): Promise<OriginalImageResult | null> {
+  if (!originalSrc) return null
+
+  // Check cache first (keyed by originalSrc)
+  const cacheKey = `__orig__${originalSrc}`
+  if (_imgCache.has(cacheKey)) {
+    const cached = _imgCache.get(cacheKey)
+    if (!cached) return null
+    // Determine format from cached data URL
+    const fmt = cached.startsWith('data:image/jpeg') ? 'JPEG' as const : 'PNG' as const
+    return { dataUrl: cached, format: fmt }
+  }
+
+  try {
+    const mimeNorm = (originalMimeType || '').toLowerCase()
+
+    // Skip PDF backgrounds — use existing preview fallback
+    if (mimeNorm === 'application/pdf') return null
+
+    // Fetch original file from Google Drive proxy
+    const res = await fetch(originalSrc)
+    if (!res.ok) {
+      console.warn(`[vector-pdf] Failed to fetch original background (${res.status}): ${originalSrc}`)
+      _imgCache.set(cacheKey, null)
+      return null
+    }
+
+    const blob = await res.blob()
+
+    // ── TIFF: decode at full resolution using utif2 ──
+    if (mimeNorm === 'image/tiff' || mimeNorm === 'image/tif') {
+      try {
+        const UTIF = await import('utif2')
+        const arrayBuffer = await blob.arrayBuffer()
+        const ifds = UTIF.decode(arrayBuffer)
+        if (ifds.length === 0) {
+          _imgCache.set(cacheKey, null)
+          return null
+        }
+        UTIF.decodeImage(arrayBuffer, ifds[0])
+        const rgba = UTIF.toRGBA8(ifds[0])
+        const width = ifds[0].width
+        const height = ifds[0].height
+
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')!
+        const imageData = ctx.createImageData(width, height)
+        imageData.data.set(new Uint8Array(rgba))
+        ctx.putImageData(imageData, 0, 0)
+        const dataUrl = canvas.toDataURL('image/png')
+
+        _imgCache.set(cacheKey, dataUrl)
+        return { dataUrl, format: 'PNG' }
+      } catch (err) {
+        console.warn('[vector-pdf] TIFF decode failed for original, falling back to preview:', err)
+        _imgCache.set(cacheKey, null)
+        return null
+      }
+    }
+
+    // ── JPEG / PNG: convert blob to data URL directly (no canvas re-encode) ──
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onloadend = () => resolve(reader.result as string)
+      reader.onerror = () => reject(new Error('FileReader failed'))
+      reader.readAsDataURL(blob)
+    })
+
+    const format: 'JPEG' | 'PNG' =
+      mimeNorm === 'image/jpeg' || mimeNorm === 'image/jpg' ? 'JPEG' : 'PNG'
+
+    _imgCache.set(cacheKey, dataUrl)
+    return { dataUrl, format }
+  } catch (err) {
+    console.warn('[vector-pdf] Failed to load original background:', err)
+    _imgCache.set(cacheKey, null)
+    return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PDF background tracking for vector embedding (Phase 3)
+// ---------------------------------------------------------------------------
+
+interface PdfBackgroundEntry {
+  pageIndex: number
+  xMm: number
+  yMm: number
+  wMm: number
+  hMm: number
+  originalSrc: string
+  pdfPageNum: number
+}
+
+let _pdfBackgrounds: PdfBackgroundEntry[] = []
+let _currentVectorPageIndex = 0
+
+// ---------------------------------------------------------------------------
 // QR Code vector generation
 // ---------------------------------------------------------------------------
 
@@ -158,55 +292,75 @@ interface BarcodeBar {
   height: number
 }
 
+/** Result from getCode128Bars including margin metrics for proper positioning */
+interface BarcodeBarResult {
+  bars: BarcodeBar[]
+  /** Fraction of the total height that is top margin (same for bottom) */
+  verticalMarginFraction: number
+}
+
 async function getCode128Bars(
   text: string,
   totalWidth: number,
   totalHeight: number,
-): Promise<BarcodeBar[]> {
+): Promise<BarcodeBarResult> {
   try {
     const JsBarcode = await import('jsbarcode')
     // Render to a temporary canvas to extract encoding
     const canvas = document.createElement('canvas')
+    // Convert mm dimensions to pixel-equivalent so JsBarcode produces
+    // the same proportions as Designer/card-renderer (which work in px).
+    const heightPx = totalHeight * BARCODE_PX_PER_MM
     JsBarcode.default(canvas, text || '0000', {
       format: 'CODE128',
-      width: 1,
-      height: totalHeight,
+      width: BARCODE_BAR_WIDTH,
+      height: barcodeBarHeight(heightPx),
       displayValue: false,
-      margin: 0,
+      margin: BARCODE_MARGIN_PX,
     })
 
     // Extract bar data from canvas pixel analysis
     const ctx = canvas.getContext('2d')!
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height)
     const bars: BarcodeBar[] = []
+
+    // JsBarcode margin adds BARCODE_MARGIN_PX white margin on all sides.
+    // Canvas height = totalHeight + 4, so the vertical margin fraction is:
+    const verticalMarginFraction = 2 / canvas.height
+    // Actual bar height in the scaled output
+    const barVisualHeight = totalHeight * (1 - 2 * verticalMarginFraction)
+
+    // Scan the MIDDLE row of the canvas to find bars.
+    // y=0 is in the top margin and would find no dark pixels.
+    const scanY = Math.floor(canvas.height / 2)
     let inBar = false
     let barStart = 0
 
     for (let x = 0; x < canvas.width; x++) {
-      // Check if pixel column is dark (black bar)
-      const idx = x * 4
+      // Check if pixel column is dark (black bar) at the scan row
+      const idx = (scanY * canvas.width + x) * 4
       const isDark = imageData.data[idx] < 128
       if (isDark && !inBar) {
         inBar = true
         barStart = x
       } else if (!isDark && inBar) {
         inBar = false
-        // Scale x positions to totalWidth
+        // Scale x positions to totalWidth (margin included in canvas.width)
         const scaledX = (barStart / canvas.width) * totalWidth
         const scaledW = ((x - barStart) / canvas.width) * totalWidth
-        bars.push({ x: scaledX, width: scaledW, height: totalHeight })
+        bars.push({ x: scaledX, width: scaledW, height: barVisualHeight })
       }
     }
     // Handle bar at end
     if (inBar) {
       const scaledX = (barStart / canvas.width) * totalWidth
       const scaledW = ((canvas.width - barStart) / canvas.width) * totalWidth
-      bars.push({ x: scaledX, width: scaledW, height: totalHeight })
+      bars.push({ x: scaledX, width: scaledW, height: barVisualHeight })
     }
 
-    return bars
+    return { bars, verticalMarginFraction }
   } catch {
-    return []
+    return { bars: [], verticalMarginFraction: 0 }
   }
 }
 
@@ -364,15 +518,25 @@ async function renderCardVectorAtSlot(
   const originX = isRotated90 ? slotX + slotW / 2 - cardMmW / 2 : slotX
   const originY = isRotated90 ? slotY + slotH / 2 - cardMmH / 2 : slotY
 
-  // Draw background
-  const bg = cardDoc.background || config.frontBackground || '#ffffff'
-  if (bg.startsWith('linear-gradient')) {
-    // Gradient backgrounds must be rasterized as they can't be easily represented as vector
-    await drawGradientBackground(pdf, bg, originX, originY, cardMmW, cardMmH, cardPxW, cardPxH)
-  } else {
-    const rgb = parseColor(bg)
-    pdf.setFillColor(rgb.r, rgb.g, rgb.b)
-    pdf.rect(originX, originY, cardMmW, cardMmH, 'F')
+  // Check if this card has a PDF background (Phase 3) — skip solid bg if so
+  // because the original PDF IS the background and will be composited by pdf-lib
+  const hasPdfBackground = cardDoc.elements.some(
+    el => el.visible && el.type === 'image' && !el.props.dynamic &&
+      (el.props.originalMimeType as string)?.toLowerCase() === 'application/pdf' &&
+      !!(el.props.originalSrc as string)
+  )
+
+  // Draw background (skip for PDF-background cards — the original PDF provides it)
+  if (!hasPdfBackground) {
+    const bg = cardDoc.background || config.frontBackground || '#ffffff'
+    if (bg.startsWith('linear-gradient')) {
+      // Gradient backgrounds must be rasterized as they can't be easily represented as vector
+      await drawGradientBackground(pdf, bg, originX, originY, cardMmW, cardMmH, cardPxW, cardPxH)
+    } else {
+      const rgb = parseColor(bg)
+      pdf.setFillColor(rgb.r, rgb.g, rgb.b)
+      pdf.rect(originX, originY, cardMmW, cardMmH, 'F')
+    }
   }
 
   // Sort elements by z-index
@@ -708,17 +872,54 @@ async function renderVectorImage(
 
   // Resolve image source
   let imgSrc = ''
+  let imgFormat: 'JPEG' | 'PNG' = 'PNG'
+  let useOriginal = false
+
   if (el.props.dynamic) {
     const fieldName = (el.props.fieldName as string) ?? 'profileImage'
     imgSrc = resolveDynamicImageSrc(member, fieldName)
   } else {
-    imgSrc = (el.props.src as string) ?? ''
+    // Static image
+    const originalSrc = (el.props.originalSrc as string) ?? ''
+    const originalMimeType = (el.props.originalMimeType as string) ?? ''
+
+    // Phase 3: PDF backgrounds — record for pdf-lib post-processing, skip jsPDF rendering
+    if (originalSrc && originalMimeType.toLowerCase() === 'application/pdf') {
+      _pdfBackgrounds.push({
+        pageIndex: _currentVectorPageIndex,
+        xMm, yMm, wMm, hMm,
+        originalSrc,
+        pdfPageNum: (el.props.originalPdfPage as number) ?? 0,
+      })
+      return
+    }
+
+    // Phase 2: try original for non-PDF types (JPEG, PNG, TIFF)
+    if (originalSrc && originalMimeType) {
+      const originalResult = await loadOriginalBackgroundAsDataUrl(originalSrc, originalMimeType)
+      if (originalResult) {
+        imgSrc = originalResult.dataUrl
+        imgFormat = originalResult.format
+        useOriginal = true
+      }
+    }
+
+    // Fall back to preview if original not available
+    if (!useOriginal) {
+      imgSrc = (el.props.src as string) ?? ''
+    }
   }
 
   if (!imgSrc) return
 
-  // Load the image
-  const dataUrl = await loadImageAsDataUrl(imgSrc)
+  // Load the image (for originals, imgSrc is already a data URL; for previews/dynamic, load via Image element)
+  let dataUrl: string | null
+  if (useOriginal) {
+    // Already a data URL from loadOriginalBackgroundAsDataUrl
+    dataUrl = imgSrc
+  } else {
+    dataUrl = await loadImageAsDataUrl(imgSrc)
+  }
   if (!dataUrl) return
 
   // Apply clipping for non-rectangular shapes
@@ -754,9 +955,9 @@ async function renderVectorImage(
     }
   }
 
-  // Draw the raster image
+  // Draw the raster image (use detected format for originals, PNG for previews)
   try {
-    pdf.addImage(dataUrl, 'PNG', xMm, yMm, wMm, hMm)
+    pdf.addImage(dataUrl, imgFormat, xMm, yMm, wMm, hMm)
   } catch {
     // Skip if image fails
   }
@@ -853,31 +1054,38 @@ async function renderVectorBarcode(
   needName = false,
   label = '',
 ) {
-  // Reserve space for the text label when needName is enabled
-  const labelHeightMm = needName ? 3.5 : 0
-  const barAreaH = hMm - labelHeightMm
-
-  // White background
+  // White background — covers the full element area
   pdf.setFillColor(255, 255, 255)
   pdf.rect(xMm, yMm, wMm, hMm, 'F')
 
-  const bars = await getCode128Bars(text, wMm, barAreaH)
-  if (bars.length === 0) return
+  // Get barcode bars with margin metrics matching JsBarcode margin:2.
+  // The barcode geometry is identical whether needName is ON or OFF.
+  const result = await getCode128Bars(text, wMm, hMm)
+  if (result.bars.length === 0) return
+
+  // Offset bars vertically by the top margin so bars don't start at the
+  // element edge — matching the margin:2 behavior in the Designer.
+  const topMarginMm = hMm * result.verticalMarginFraction
 
   // Draw each bar as a vector rectangle
   pdf.setFillColor(0, 0, 0)
-  for (const bar of bars) {
-    pdf.rect(xMm + bar.x, yMm, bar.width, bar.height, 'F')
+  for (const bar of result.bars) {
+    pdf.rect(xMm + bar.x, yMm + topMarginMm, bar.width, bar.height, 'F')
   }
 
-  // Draw column heading label below bars when needName is enabled
-  // label is the actual table column heading (e.g. "Blood Group"),
-  // NOT the encoded barcode value.
+  // Draw column heading label BELOW the barcode element when needName is enabled.
+  // A white background rectangle is drawn flush with the barcode container's
+  // bottom edge, matching its width, so the two look like one continuous block.
   if (needName && label) {
-    pdf.setFontSize(7)
+    // White background rectangle for the name — zero gap, same width
+    pdf.setFillColor(255, 255, 255)
+    pdf.rect(xMm, yMm + hMm, wMm, BARCODE_NAME_BG_HEIGHT_MM, 'F')
+
+    // Center the name text inside the background rectangle
+    pdf.setFontSize(BARCODE_LABEL_FONT_SIZE_PT)
     pdf.setTextColor(0, 0, 0)
-    const labelY = yMm + barAreaH + labelHeightMm * 0.8
-    pdf.text(label, xMm + wMm / 2, labelY, { align: 'center' })
+    const labelY = yMm + hMm + BARCODE_NAME_BG_HEIGHT_MM / 2
+    pdf.text(label, xMm + wMm / 2, labelY, { align: 'center', baseline: 'middle' })
   }
 }
 
@@ -1218,6 +1426,104 @@ function drawVectorWatermark(
 }
 
 // ---------------------------------------------------------------------------
+// pdf-lib post-processing: embed original PDF backgrounds (Phase 3)
+// ---------------------------------------------------------------------------
+
+/**
+ * After jsPDF produces the vector PDF, this function uses pdf-lib to compose
+ * original PDF backgrounds BEHIND the jsPDF content.
+ *
+ * For pages WITHOUT PDF backgrounds: copied verbatim from jsPDF output.
+ * For pages WITH PDF backgrounds:
+ *   1. Create a blank page with the same dimensions
+ *   2. Draw the original PDF background page (bottom layer)
+ *   3. Overlay the entire jsPDF page on top (all CardForge elements)
+ *
+ * This guarantees correct layering: PDF background → CardForge elements on top.
+ */
+async function embedPdfBackgrounds(
+  jsPdfBytes: ArrayBuffer,
+  backgrounds: PdfBackgroundEntry[],
+): Promise<Uint8Array> {
+  const { PDFDocument } = await import('pdf-lib')
+
+  const overlayDoc = await PDFDocument.load(jsPdfBytes)
+  const finalDoc = await PDFDocument.create()
+
+  // Cache fetched original PDFs by their Drive URL
+  const origPdfCache = new Map<string, Awaited<ReturnType<typeof PDFDocument.load>>>()
+
+  // Group backgrounds by page index
+  const bgByPage = new Map<number, PdfBackgroundEntry[]>()
+  for (const bg of backgrounds) {
+    const list = bgByPage.get(bg.pageIndex) ?? []
+    list.push(bg)
+    bgByPage.set(bg.pageIndex, list)
+  }
+
+  const totalPages = overlayDoc.getPageCount()
+  const mmToPt = 72 / 25.4
+
+  for (let pi = 0; pi < totalPages; pi++) {
+    const pageBgs = bgByPage.get(pi)
+
+    if (!pageBgs || pageBgs.length === 0) {
+      // No PDF backgrounds on this page — copy verbatim (preserves /Rotate)
+      const [copied] = await finalDoc.copyPages(overlayDoc, [pi])
+      finalDoc.addPage(copied)
+      continue
+    }
+
+    // This page has PDF backgrounds — compose layers
+    const overlayPage = overlayDoc.getPage(pi)
+    const { width, height } = overlayPage.getSize()
+    const finalPage = finalDoc.addPage([width, height])
+
+    // 1. Draw PDF backgrounds (bottom layer)
+    for (const bg of pageBgs) {
+      try {
+        let origDoc = origPdfCache.get(bg.originalSrc)
+        if (!origDoc) {
+          const res = await fetch(bg.originalSrc)
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const bytes = await res.arrayBuffer()
+          origDoc = await PDFDocument.load(bytes, { ignoreEncryption: true })
+          origPdfCache.set(bg.originalSrc, origDoc)
+        }
+
+        const pageNum = Math.max(0, Math.min(bg.pdfPageNum, origDoc.getPageCount() - 1))
+        const [embedded] = await finalDoc.embedPages([origDoc.getPage(pageNum)])
+
+        // Convert mm coordinates (jsPDF top-left origin) to pdf-lib points (bottom-left origin)
+        const xPt = bg.xMm * mmToPt
+        const yPt = height - bg.yMm * mmToPt - bg.hMm * mmToPt
+        const wPt = bg.wMm * mmToPt
+        const hPt = bg.hMm * mmToPt
+
+        finalPage.drawPage(embedded, { x: xPt, y: yPt, width: wPt, height: hPt })
+      } catch (err) {
+        console.warn('[vector-pdf] Failed to embed PDF background, skipping:', err)
+        // Fallback: the card just won't have this background layer.
+        // The PNG preview was already skipped in renderVectorImage, so the
+        // card will appear without a background — acceptable graceful degradation.
+      }
+    }
+
+    // 2. Overlay jsPDF content on top (all CardForge elements: text, QR, photos, etc.)
+    const [overlayEmbed] = await finalDoc.embedPages([overlayPage])
+    finalPage.drawPage(overlayEmbed, { x: 0, y: 0, width, height })
+
+    // Preserve page rotation from jsPDF (/Rotate for rotated-90, rotate-page-180, etc.)
+    const rotation = overlayPage.getRotation()
+    if (rotation.angle !== 0) {
+      finalPage.setRotation(rotation)
+    }
+  }
+
+  return finalDoc.save()
+}
+
+// ---------------------------------------------------------------------------
 // Main vector PDF export function
 // ---------------------------------------------------------------------------
 
@@ -1235,6 +1541,10 @@ export interface VectorPDFInput {
 export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
   const { design, members, config, onProgress, isPortal } = input
   const { default: jsPDF } = await import('jspdf')
+
+  // Reset Phase 3 tracking state
+  _pdfBackgrounds = []
+  _currentVectorPageIndex = 0
 
   const cardConfig = design.cardConfiguration
   const frontDoc = design.frontDocument
@@ -1388,6 +1698,9 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
 
     if (pi > 0) pdf.addPage()
 
+    // Track current page index for Phase 3 PDF background recording
+    _currentVectorPageIndex = pi
+
     // Apply side adjustment (offset + rotation)
     const adj = page.side === 'back' ? config.backAdjustment : config.frontAdjustment
     const hasAdj = adj.offsetX !== 0 || adj.offsetY !== 0 || adj.rotation !== 0
@@ -1494,6 +1807,24 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
   }
 
   onProgress?.(totalPages, totalPages, 'Finalizing vector PDF…')
+
+  // Phase 3: If any PDF backgrounds were recorded, post-process with pdf-lib
+  if (_pdfBackgrounds.length > 0) {
+    onProgress?.(totalPages, totalPages, 'Embedding PDF backgrounds…')
+    try {
+      const jsPdfBytes = pdf.output('arraybuffer') as ArrayBuffer
+      const finalBytes = await embedPdfBackgrounds(jsPdfBytes, _pdfBackgrounds)
+      _pdfBackgrounds = []
+      return new Blob([finalBytes], { type: 'application/pdf' })
+    } catch (err) {
+      console.warn('[vector-pdf] PDF background embedding failed, returning jsPDF output:', err)
+      _pdfBackgrounds = []
+      // Graceful fallback: return jsPDF output without PDF backgrounds
+      return pdf.output('blob')
+    }
+  }
+
+  _pdfBackgrounds = []
   return pdf.output('blob')
 }
 
