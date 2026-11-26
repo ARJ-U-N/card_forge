@@ -1391,7 +1391,7 @@ function distributeCardsForVector(
 // ---------------------------------------------------------------------------
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function drawVectorWatermark(
+export function drawVectorWatermark(
   pdf: any,
   x: number,
   y: number,

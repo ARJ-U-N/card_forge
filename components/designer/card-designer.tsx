@@ -856,6 +856,51 @@ export function CardDesigner({ designId }: Props) {
     [activeSide, pushUndo],
   )
 
+  // ── Align to Card — center element or group relative to card ──────────
+
+  const handleAlignToCard = useCallback(
+    (action: 'center-h' | 'center-v' | 'center-both') => {
+      if (!config) return
+      const { w: cardW, h: cardH } = visualCardSize(config)
+      pushUndo()
+
+      // Individual element
+      if (selectedElementId) {
+        setActiveDoc((prev) => {
+          const el = prev.elements.find((e) => e.id === selectedElementId)
+          if (!el) return prev
+          const updates: Partial<CanvasElement> = {}
+          if (action === 'center-h' || action === 'center-both') {
+            updates.x = Math.round((cardW - el.width) / 2)
+          }
+          if (action === 'center-v' || action === 'center-both') {
+            updates.y = Math.round((cardH - el.height) / 2)
+          }
+          return {
+            ...prev,
+            elements: prev.elements.map((e) => (e.id === el.id ? { ...e, ...updates } : e)),
+          }
+        })
+        return
+      }
+
+      // Group
+      if (selectedGroupId) {
+        const bounds = getGroupBounds(selectedGroupId)
+        if (!bounds) return
+        let dx = 0, dy = 0
+        if (action === 'center-h' || action === 'center-both') {
+          dx = Math.round((cardW - bounds.w) / 2 - bounds.x)
+        }
+        if (action === 'center-v' || action === 'center-both') {
+          dy = Math.round((cardH - bounds.h) / 2 - bounds.y)
+        }
+        handleMoveGroup(selectedGroupId, dx, dy)
+      }
+    },
+    [config, selectedElementId, selectedGroupId, getGroupBounds, handleMoveGroup, pushUndo, activeSide],
+  )
+
   // ── Group alignment & spacing helpers ──────────────────────────────────
 
   const handleGroupAlign = useCallback(
@@ -1367,6 +1412,7 @@ export function CardDesigner({ designId }: Props) {
           onResizeGroup={handleResizeGroup}
           onToggleGroupLock={handleToggleGroupLock}
           getGroupBounds={getGroupBounds}
+          onAlignToCard={handleAlignToCard}
         />
       </div>
     </div>

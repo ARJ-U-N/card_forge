@@ -100,6 +100,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
   const [exporting, setExporting] = useState(false)
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0, status: '' })
   const [cancelled, setCancelled] = useState(false)
+  const [addWatermark, setAddWatermark] = useState(false)
 
   // ── Presets ──────────────────────────────────────────────────────────
   const [presets, setPresets] = useState<PrintPreset[]>([])
@@ -211,7 +212,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
     try {
       const blob = await generatePDF(cards, config, cardOrientation, (c, t, s) => {
         setExportProgress({ current: c, total: t, status: s })
-      }, customCardMm)
+      }, customCardMm, addWatermark)
 
       if (!cancelled) {
         const url = URL.createObjectURL(blob)
@@ -231,7 +232,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
     } finally {
       setExporting(false)
     }
-  }, [cards, config, cardOrientation, totalPages, cancelled])
+  }, [cards, config, cardOrientation, totalPages, cancelled, addWatermark])
 
   // ── Export Vector PDF ─────────────────────────────────────────────────
   const handleExportVectorPDF = useCallback(async () => {
@@ -305,7 +306,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
         onProgress: (c, t, s) => {
           setExportProgress({ current: c, total: t, status: s })
         },
-        isPortal,
+        isPortal: isPortal || addWatermark,
       })
 
       if (!cancelled) {
@@ -329,7 +330,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
       session?.dispose()
       setExporting(false)
     }
-  }, [design, members, config, totalPages, cancelled, cards, isPortal])
+  }, [design, members, config, totalPages, cancelled, cards, isPortal, addWatermark])
 
   // ── Export images ─────────────────────────────────────────────────────
   const handleExportImages = useCallback(async (format: 'png' | 'jpeg') => {
@@ -681,6 +682,12 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
             </Section>
 
             <Separator />
+            {!isPortal && (
+              <div className="flex items-center gap-2 py-1">
+                <Checkbox id="addWatermark" checked={addWatermark} onCheckedChange={(v) => setAddWatermark(!!v)} />
+                <label htmlFor="addWatermark" className="text-xs text-muted-foreground cursor-pointer select-none">Add Watermark</label>
+              </div>
+            )}
             <div className="flex flex-col gap-1.5">
               <Button size="sm" onClick={handleExportPDF} disabled={exporting || cards.length === 0}>
                 {exporting ? <Spinner data-icon="inline-start" /> : <FileIcon data-icon="inline-start" />}

@@ -3,6 +3,7 @@
  * and generates PDF output using jsPDF.
  */
 import type { RenderedCard } from './card-renderer'
+import { drawVectorWatermark } from './vector-pdf-renderer'
 
 // ---------------------------------------------------------------------------
 // Configuration types
@@ -347,6 +348,7 @@ export async function generatePDF(
   cardOrientation: 'horizontal' | 'vertical',
   onProgress?: (current: number, total: number, status: string) => void,
   customCardMm?: { w: number; h: number },
+  addWatermark = false,
 ): Promise<Blob> {
   const { default: jsPDF } = await import('jspdf')
 
@@ -455,6 +457,11 @@ export async function generatePDF(
         // Skip if image fails
       }
 
+      // Watermark overlay (admin opt-in)
+      if (addWatermark) {
+        drawVectorWatermark(pdf as any, drawX, drawY, slot.w, slot.h)
+      }
+
       // Card borders
       if (config.cardBorders) {
         pdf.setDrawColor(200, 200, 200)
@@ -499,6 +506,11 @@ export async function generatePDF(
           try {
             pdf.addImage(backImg, 'PNG', backX, backY, slot.w, slot.h)
           } catch { /* skip */ }
+
+          // Watermark overlay on back card (admin opt-in)
+          if (addWatermark) {
+            drawVectorWatermark(pdf as any, backX, backY, slot.w, slot.h)
+          }
 
           if (config.cardBorders) {
             pdf.setDrawColor(200, 200, 200)

@@ -29,6 +29,9 @@ import {
   FolderOpenIcon,
   ChevronDownIcon,
   ChevronRightIcon,
+  AlignHorizontalJustifyCenterIcon,
+  AlignVerticalJustifyCenterIcon,
+  CrosshairIcon,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -88,6 +91,8 @@ interface Props {
   onResizeGroup?: (gId: string, w: number, h: number) => void
   onToggleGroupLock?: (gId: string) => void
   getGroupBounds?: (gId: string) => { x: number; y: number; w: number; h: number } | null
+  /** Align selected element or group to the card center */
+  onAlignToCard?: (action: 'center-h' | 'center-v' | 'center-both') => void
 }
 
 type RightTab = 'customize' | 'layers'
@@ -135,6 +140,7 @@ export function RightPanel({
   onResizeGroup,
   onToggleGroupLock,
   getGroupBounds,
+  onAlignToCard,
 }: Props) {
   const [activeTab, setActiveTab] = useState<RightTab>('customize')
   const [radiusLocked, setRadiusLocked] = useState(true)
@@ -444,6 +450,22 @@ export function RightPanel({
                     value={(el.props.opacity as number) ?? 1}
                     onChange={(e) => updateProp('opacity', Number(e.target.value))}
                     className="w-full accent-primary" />
+                </div>
+
+                {/* ── Align to Card ────────────────────────────────── */}
+                <h4 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  Align to Card
+                </h4>
+                <div className="flex gap-1">
+                  <Button variant="outline" size="icon-xs" title="Center Horizontally on Card" onClick={() => onAlignToCard?.('center-h')}>
+                    <AlignHorizontalJustifyCenterIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Center Vertically on Card" onClick={() => onAlignToCard?.('center-v')}>
+                    <AlignVerticalJustifyCenterIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Center Both on Card" onClick={() => onAlignToCard?.('center-both')}>
+                    <CrosshairIcon className="size-3.5" />
+                  </Button>
                 </div>
 
                 <Separator />
@@ -971,6 +993,24 @@ export function RightPanel({
                   </Button>
                   <Button variant="outline" size="xs" className="flex-1" onClick={() => onGroupAlign?.(selectedGroupId, 'match-height')}>
                     Match H
+                  </Button>
+                </div>
+
+                <Separator />
+
+                {/* Align to Card */}
+                <h4 className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                  Align to Card
+                </h4>
+                <div className="flex gap-1">
+                  <Button variant="outline" size="icon-xs" title="Center Group Horizontally on Card" onClick={() => onAlignToCard?.('center-h')}>
+                    <AlignHorizontalJustifyCenterIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Center Group Vertically on Card" onClick={() => onAlignToCard?.('center-v')}>
+                    <AlignVerticalJustifyCenterIcon className="size-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-xs" title="Center Group Both on Card" onClick={() => onAlignToCard?.('center-both')}>
+                    <CrosshairIcon className="size-3.5" />
                   </Button>
                 </div>
 
