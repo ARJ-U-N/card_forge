@@ -36,6 +36,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Separator } from '@/components/ui/separator'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Select,
   SelectContent,
@@ -681,6 +682,7 @@ export function RightPanel({
 
                     {/* QR field binding */}
                     {el.props.qrCode && (
+                      <>
                       <div className="flex flex-col gap-0.5">
                         <label className="text-[10px] text-muted-foreground">QR Data Source</label>
                         <Select value={(el.props.fieldName as string) ?? 'employeeId'} onValueChange={(v) => updateProp('fieldName', v)}>
@@ -707,6 +709,33 @@ export function RightPanel({
                           </SelectContent>
                         </Select>
                       </div>
+
+                      {/* QR Extra White Border */}
+                      <div className="flex items-center gap-2 mt-1">
+                        <Checkbox id="qrExtraWhiteBorder" checked={!!el.props.qrExtraWhiteBorder}
+                          onCheckedChange={(v) => {
+                            const on = !!v
+                            if (on) {
+                              updateProp('qrExtraWhiteBorder', true)
+                            } else {
+                              onUpdateElement(el.id, { props: { ...el.props, qrExtraWhiteBorder: false, qrCornerRadius: 0 } })
+                            }
+                          }} />
+                        <label htmlFor="qrExtraWhiteBorder" className="text-xs text-muted-foreground cursor-pointer select-none">Extra White Border</label>
+                      </div>
+
+                      {/* QR Corner Radius */}
+                      <div className="flex flex-col gap-0.5">
+                        <label className="text-[10px] text-muted-foreground">
+                          Corner Radius ({((el.props.qrCornerRadius as number) ?? 0).toFixed(1)} mm)
+                        </label>
+                        <input type="range" min={0} max={1} step={0.1}
+                          value={(el.props.qrCornerRadius as number) ?? 0}
+                          onChange={(e) => updateProp('qrCornerRadius', Number(e.target.value))}
+                          disabled={!el.props.qrExtraWhiteBorder}
+                          className="w-full accent-primary" />
+                      </div>
+                      </>
                     )}
 
                     {/* Barcode field binding */}

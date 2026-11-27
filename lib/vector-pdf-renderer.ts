@@ -857,7 +857,9 @@ async function renderVectorImage(
   if (el.props.qrCode) {
     const fieldName = (el.props.fieldName as string) ?? 'employeeId'
     const qrText = resolveDynamicText(member, fieldName)
-    await renderVectorQR(pdf, qrText, xMm, yMm, wMm, hMm)
+    const qrExtraBorder = !!el.props.qrExtraWhiteBorder
+    const qrCornerRadius = qrExtraBorder ? ((el.props.qrCornerRadius as number) ?? 0) : 0
+    await renderVectorQR(pdf, qrText, xMm, yMm, wMm, hMm, qrExtraBorder, qrCornerRadius)
     return
   }
 
@@ -1003,6 +1005,8 @@ async function renderVectorQR(
   yMm: number,
   wMm: number,
   hMm: number,
+  extraBorder = false,
+  cornerRadiusMm = 0,
 ) {
   const qr = await getQRMatrix(text)
   if (!qr) return
@@ -1012,31 +1016,101 @@ async function renderVectorQR(
 
   // Use the smaller dimension for a square QR
   const qrDim = Math.min(wMm, hMm)
-  const moduleSize = qrDim / size
+
+  // Extra border: add 5% padding around the QR modules
+  const extraPad = extraBorder ? qrDim * 0.05 : 0
+  const innerDim = qrDim - extraPad * 2
+  const moduleSize = innerDim / size
 
   // Center the QR in the element
-  const offsetX = xMm + (wMm - qrDim) / 2
-  const offsetY = yMm + (hMm - qrDim) / 2
+  const offsetX = xMm + (wMm - qrDim) / 2 + extraPad
+  const offsetY = yMm + (hMm - qrDim) / 2 + extraPad
 
-  // White background
+  // White background (rounded if needed)
   pdf.setFillColor(255, 255, 255)
-  pdf.rect(xMm, yMm, wMm, hMm, 'F')
+  if (extraBorder && cornerRadiusMm > 0) {
+    pdf.roundedRect(xMm, yMm, wMm, hMm, cornerRadiusMm, cornerRadiusMm, 'F')
 
-  // Draw dark modules as vector rectangles
-  pdf.setFillColor(0, 0, 0)
-  for (let row = 0; row < size; row++) {
-    for (let col = 0; col < size; col++) {
-      if (modules[row * size + col]) {
-        pdf.rect(
-          offsetX + col * moduleSize,
-          offsetY + row * moduleSize,
-          moduleSize,
-          moduleSize,
-          'F',
-        )
+    // Draw dark modules, skipping any that fall outside the rounded rect boundary
+    pdf.setFillColor(0, 0, 0)
+    for (let row = 0; row < size; row++) {
+      for (let col = 0; col < size; col++) {
+        if (modules[row * size + col]) {
+          const mx = offsetX + col * moduleSize
+          const my = offsetY + row * moduleSize
+          // Check if this module's corners are inside the rounded rect
+          if (isInsideRoundedRect(mx, my, moduleSize, moduleSize, xMm, yMm, wMm, hMm, cornerRadiusMm)) {
+            pdf.rect(mx, my, moduleSize, moduleSize, 'F')
+          }
+        }
+      }
+    }
+  } else {
+    pdf.rect(xMm, yMm, wMm, hMm, 'F')
+
+    // Draw dark modules as vector rectangles
+    pdf.setFillColor(0, 0, 0)
+    for (let row = 0; row < size; row++) {
+      for (let col = 0; col < size; col++) {
+        if (modules[row * size + col]) {
+          pdf.rect(
+            offsetX + col * moduleSize,
+            offsetY + row * moduleSize,
+            moduleSize,
+            moduleSize,
+            'F',
+          )
+        }
       }
     }
   }
+}
+
+/** Check if a small rect is fully inside a rounded rect boundary */
+function isInsideRoundedRect(
+  mx: number, my: number, mw: number, mh: number,
+  rx: number, ry: number, rw: number, rh: number,
+  r: number,
+): boolean {
+  // Check all four corners of the module
+  return (
+    isPointInsideRoundedRect(mx, my, rx, ry, rw, rh, r) &&
+    isPointInsideRoundedRect(mx + mw, my, rx, ry, rw, rh, r) &&
+    isPointInsideRoundedRect(mx, my + mh, rx, ry, rw, rh, r) &&
+    isPointInsideRoundedRect(mx + mw, my + mh, rx, ry, rw, rh, r)
+  )
+}
+
+/** Check if a point is inside a rounded rect */
+function isPointInsideRoundedRect(
+  px: number, py: number,
+  rx: number, ry: number, rw: number, rh: number,
+  r: number,
+): boolean {
+  // Must be inside the outer rect first
+  if (px < rx || px > rx + rw || py < ry || py > ry + rh) return false
+  // Check each corner zone
+  // Top-left corner
+  if (px < rx + r && py < ry + r) {
+    const dx = px - (rx + r), dy = py - (ry + r)
+    return dx * dx + dy * dy <= r * r
+  }
+  // Top-right corner
+  if (px > rx + rw - r && py < ry + r) {
+    const dx = px - (rx + rw - r), dy = py - (ry + r)
+    return dx * dx + dy * dy <= r * r
+  }
+  // Bottom-right corner
+  if (px > rx + rw - r && py > ry + rh - r) {
+    const dx = px - (rx + rw - r), dy = py - (ry + rh - r)
+    return dx * dx + dy * dy <= r * r
+  }
+  // Bottom-left corner
+  if (px < rx + r && py > ry + rh - r) {
+    const dx = px - (rx + r), dy = py - (ry + rh - r)
+    return dx * dx + dy * dy <= r * r
+  }
+  return true
 }
 
 // ---------------------------------------------------------------------------
@@ -1593,34 +1667,34 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
   // both content and page edges equally, preserving their relative angle.
   const effectiveConfig: PrintConfig = isRotated90
     ? {
-        ...config,
-        layoutMode: (config.autoLayout ? 'automatic' : 'custom') as LayoutMode,
-        orientation: 'landscape' as const,
-        // Swap gaps: user's H gap → landscape V (appears visual H after /Rotate)
-        gutterH: config.gutterV,
-        gutterV: config.gutterH,
-        // Swap rows/cols: user's columns → landscape rows (appears visual cols after /Rotate)
-        rows: config.columns,
-        columns: config.rows,
-        // Rotate margins: landscape-left → visual-top after /Rotate 90
-        margins: {
-          left: config.margins.top,
-          right: config.margins.bottom,
-          top: config.margins.right,
-          bottom: config.margins.left,
-        },
-        // Rotate offsets: landscape +X → visual +Y, landscape +Y → visual −X
-        frontAdjustment: {
-          offsetX: config.frontAdjustment.offsetY,
-          offsetY: -config.frontAdjustment.offsetX,
-          rotation: config.frontAdjustment.rotation,
-        },
-        backAdjustment: {
-          offsetX: config.backAdjustment.offsetY,
-          offsetY: -config.backAdjustment.offsetX,
-          rotation: config.backAdjustment.rotation,
-        },
-      }
+      ...config,
+      layoutMode: (config.autoLayout ? 'automatic' : 'custom') as LayoutMode,
+      orientation: 'landscape' as const,
+      // Swap gaps: user's H gap → landscape V (appears visual H after /Rotate)
+      gutterH: config.gutterV,
+      gutterV: config.gutterH,
+      // Swap rows/cols: user's columns → landscape rows (appears visual cols after /Rotate)
+      rows: config.columns,
+      columns: config.rows,
+      // Rotate margins: landscape-left → visual-top after /Rotate 90
+      margins: {
+        left: config.margins.top,
+        right: config.margins.bottom,
+        top: config.margins.right,
+        bottom: config.margins.left,
+      },
+      // Rotate offsets: landscape +X → visual +Y, landscape +Y → visual −X
+      frontAdjustment: {
+        offsetX: config.frontAdjustment.offsetY,
+        offsetY: -config.frontAdjustment.offsetX,
+        rotation: config.frontAdjustment.rotation,
+      },
+      backAdjustment: {
+        offsetX: config.backAdjustment.offsetY,
+        offsetY: -config.backAdjustment.offsetX,
+        rotation: config.backAdjustment.rotation,
+      },
+    }
     : config
 
   const layout = calculateLayout(effectiveConfig, cardConfig.orientation, customCardMm)
@@ -1650,7 +1724,7 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
   // so this only affects this specific PDF document.
   if (isRotated90) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
+    ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
       this.internal.write('/Rotate 90')
     })
   }
@@ -1668,13 +1742,13 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
 
     let putPageCounter180 = 0
     const rotateValue = isRotated90 ? 270 : 180
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
-      putPageCounter180++
-      if (backPageNumbers.has(putPageCounter180)) {
-        this.internal.write(`/Rotate ${rotateValue}`)
-      }
-    })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+        putPageCounter180++
+        if (backPageNumbers.has(putPageCounter180)) {
+          this.internal.write(`/Rotate ${rotateValue}`)
+        }
+      })
   }
 
   // ── Page-level /Rotate 180 for single-sided rotatePage180 ──────────────
@@ -1684,10 +1758,10 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
   // so we use the combined value (270 = 90 + 180) to avoid overriding it.
   if (config.rotatePage180 && (config.printMode === 'front-only' || config.printMode === 'back-only')) {
     const rotateValue = isRotated90 ? 270 : 180
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ;(pdf as any).internal.events.subscribe('putPage', function (this: any) {
-      this.internal.write(`/Rotate ${rotateValue}`)
-    })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+        this.internal.write(`/Rotate ${rotateValue}`)
+      })
   }
 
   const totalPages = pages.length
@@ -1706,16 +1780,16 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
     const hasAdj = adj.offsetX !== 0 || adj.offsetY !== 0 || adj.rotation !== 0
 
     if (hasAdj) {
-      ;(pdf as any).saveGraphicsState()
+      ; (pdf as any).saveGraphicsState()
       if (adj.rotation !== 0) {
         const cx = layout.pageW / 2
         const cy = layout.pageH / 2
         const rad = (adj.rotation * Math.PI) / 180
         const cos = Math.cos(rad)
         const sin = Math.sin(rad)
-        ;(pdf as any).setCurrentTransformationMatrix(
-          (pdf as any).Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos),
-        )
+          ; (pdf as any).setCurrentTransformationMatrix(
+            (pdf as any).Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos),
+          )
       }
     }
 
@@ -1799,7 +1873,7 @@ export async function generateVectorPDF(input: VectorPDFInput): Promise<Blob> {
 
     // Restore graphics state
     if (hasAdj && adj.rotation !== 0) {
-      ;(pdf as any).restoreGraphicsState()
+      ; (pdf as any).restoreGraphicsState()
     }
 
     // Yield to main thread

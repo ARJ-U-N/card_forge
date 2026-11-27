@@ -567,7 +567,8 @@ export function CardCanvas({
             onMouseDown={(e) => handleMouseDown(e, el)}>
 
             {isQR ? (
-              <QRPreview fieldName={(el.props.fieldName as string) ?? 'employeeId'} width={el.width} height={el.height} />
+              <QRPreview fieldName={(el.props.fieldName as string) ?? 'employeeId'} width={el.width} height={el.height}
+                extraBorder={!!el.props.qrExtraWhiteBorder} cornerRadius={(el.props.qrCornerRadius as number) ?? 0} />
             ) : isBarcode ? (
               <BarcodePreview
                 fieldName={(el.props.fieldName as string) ?? 'employeeId'}
@@ -745,19 +746,58 @@ export function CardCanvas({
 }
 
 // ── QR Code Preview ────────────────────────────────────────────────────
-function QRPreview({ fieldName, width, height }: { fieldName: string; width: number; height: number }) {
+function QRPreview({ fieldName, width, height, extraBorder, cornerRadius }: {
+  fieldName: string; width: number; height: number; extraBorder: boolean; cornerRadius: number
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  // Extra border padding in px (5% of QR dimension)
+  const extraPad = extraBorder ? Math.round(Math.min(width, height) * 0.05) : 0
+  // Corner radius: convert mm to px (PX_PER_MM ≈ 3.785)
+  const radiusPx = extraBorder && cornerRadius > 0 ? Math.round(cornerRadius * PX_PER_MM) : 0
 
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     import('qrcode').then((QRCode) => {
-      QRCode.toCanvas(canvas, `{${fieldName}}`, {
-        width: Math.min(width, height),
-        margin: 1,
+      // Render QR to a temporary canvas with no library margin,
+      // then composite onto the main one with our own padding
+      const qrSize = Math.min(width, height) - extraPad * 2
+      const tmpCanvas = document.createElement('canvas')
+      QRCode.toCanvas(tmpCanvas, `{${fieldName}}`, {
+        width: Math.max(qrSize, 20),
+        margin: 0,
         color: { dark: '#000000', light: '#ffffff' },
+      }).then(() => {
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) return
+
+        // Draw white background (rounded if needed)
+        ctx.fillStyle = '#ffffff'
+        if (radiusPx > 0) {
+          ctx.beginPath()
+          ctx.roundRect(0, 0, width, height, radiusPx)
+          ctx.fill()
+          // Clip QR modules to the rounded boundary
+          ctx.save()
+          ctx.beginPath()
+          ctx.roundRect(0, 0, width, height, radiusPx)
+          ctx.clip()
+        } else {
+          ctx.fillRect(0, 0, width, height)
+        }
+
+        // Draw QR centered
+        ctx.drawImage(tmpCanvas, extraPad, extraPad, qrSize, qrSize)
+
+        if (radiusPx > 0) {
+          ctx.restore()
+        }
       }).catch(() => {
-        // Fallback: draw placeholder
+        canvas.width = width
+        canvas.height = height
         const ctx = canvas.getContext('2d')
         if (ctx) {
           ctx.fillStyle = '#f3f4f6'
@@ -769,9 +809,12 @@ function QRPreview({ fieldName, width, height }: { fieldName: string; width: num
         }
       })
     })
-  }, [fieldName, width, height])
+  }, [fieldName, width, height, extraPad, radiusPx])
 
-  return <canvas ref={canvasRef} className="size-full object-contain" />
+  return (
+    <canvas ref={canvasRef} className="size-full object-contain"
+      style={radiusPx > 0 ? { borderRadius: radiusPx } : undefined} />
+  )
 }
 
 // ── Barcode Preview ────────────────────────────────────────────────────

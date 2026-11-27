@@ -131,10 +131,11 @@ async function loadImage(src: string): Promise<HTMLImageElement | null> {
   })
 }
 
-async function generateQRDataUrl(text: string, size: number): Promise<string> {
+async function generateQRDataUrl(text: string, size: number, extraBorder = false): Promise<string> {
   try {
     const QRCode = await import('qrcode')
-    return await QRCode.toDataURL(text || 'N/A', { width: size, margin: 1 })
+    // margin 0 = no library quiet zone; margin 2 adds ~2 module quiet zone for extra border
+    return await QRCode.toDataURL(text || 'N/A', { width: size, margin: extraBorder ? 2 : 0 })
   } catch {
     return ''
   }
@@ -342,7 +343,8 @@ async function renderSide(
         if (el.props.qrCode) {
           const fieldName = (el.props.fieldName as string) ?? 'employeeId'
           const qrText = resolveDynamicText(member, fieldName)
-          imgSrc = await generateQRDataUrl(qrText, Math.min(el.width, el.height) * 2)
+          const qrExtraBorder = !!el.props.qrExtraWhiteBorder
+          imgSrc = await generateQRDataUrl(qrText, Math.min(el.width, el.height) * 2, qrExtraBorder)
         } else if (el.props.barcode) {
           const fieldName = (el.props.fieldName as string) ?? 'employeeId'
           const bcText = resolveDynamicText(member, fieldName)
@@ -401,7 +403,15 @@ async function renderSide(
           const img = await loadImage(imgSrc)
           if (img) {
             ctx.save()
-            if (isCircle || isOval || isPolygon || hasRadius) {
+
+            // QR corner radius clipping (only when extra white border is ON)
+            const qrRadius = el.props.qrCode && el.props.qrExtraWhiteBorder
+              ? ((el.props.qrCornerRadius as number) ?? 0) * PX_PER_MM : 0
+            if (qrRadius > 0) {
+              ctx.beginPath()
+              ctx.roundRect(el.x, el.y, el.width, el.height, qrRadius)
+              ctx.clip()
+            } else if (isCircle || isOval || isPolygon || hasRadius) {
               applyClip()
               ctx.clip()
             }
