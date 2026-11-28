@@ -138,6 +138,22 @@ async function loadImageAsDataUrl(src: string): Promise<string | null> {
   })
 }
 
+/**
+ * Clear cached image data URLs used by the vector PDF renderer.
+ *
+ * Call between batched exports to release memory from processed members'
+ * dynamic images (profile photos, signatures, etc.).  Font registrations
+ * are intentionally preserved — they are shared across batches and would
+ * simply be re-registered.
+ *
+ * Static design images (logos, backgrounds) will be re-fetched and
+ * re-cached on the next batch, which is a small cost compared to the
+ * memory savings from releasing all per-member image data URLs.
+ */
+export function clearVectorImageCache(): void {
+  _imgCache.clear()
+}
+
 // ---------------------------------------------------------------------------
 // Original background image loader (Phase 2)
 //
@@ -1595,6 +1611,370 @@ async function embedPdfBackgrounds(
   }
 
   return finalDoc.save()
+}
+
+// ---------------------------------------------------------------------------
+// Sheet-level rendering for batched export (Phase 1)
+//
+// These functions allow the batch orchestrator to control rendering at the
+// physical-sheet level, enabling per-sheet checkpoints and adaptive decisions.
+// ---------------------------------------------------------------------------
+
+/**
+ * Opaque handle to a jsPDF document being built incrementally.
+ * The batch orchestrator creates one per batch, renders sheets into it,
+ * and finalises it when the batch is complete.
+ */
+export interface VectorPDFHandle {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  pdf: any
+  pageCount: number
+  isRotated90: boolean
+  hasRotatePageEvent: boolean
+  /** Track page numbers that are duplex back pages (1-indexed, for putPage event). */
+  backPageNumbers: Set<number>
+}
+
+/**
+ * Create a new jsPDF document configured for the given design and print config.
+ * Returns a handle that can be passed to renderSheetToExistingPDF().
+ */
+export async function createVectorPDF(
+  design: Design,
+  config: PrintConfig,
+  customCardMm?: { w: number; h: number },
+): Promise<VectorPDFHandle> {
+  const { default: jsPDF } = await import('jspdf')
+
+  const isRotated90 = config.layoutMode === 'rotated-90'
+  const pdfOrientation = isRotated90 ? 'landscape' : config.orientation
+
+  // Reset PDF background tracking for this batch — entries accumulate
+  // across sheets within the batch, then finalizePDFAsBlob processes them all.
+  _pdfBackgrounds = []
+  _currentVectorPageIndex = 0
+
+  const pdf = new jsPDF({
+    orientation: pdfOrientation === 'landscape' ? 'landscape' : 'portrait',
+    unit: 'mm',
+    format: config.paperSize === 'a3' ? 'a3' : config.paperSize === 'a4' ? 'a4' : config.paperSize === 'letter' ? 'letter' : 'legal',
+  })
+
+  // Register page-level /Rotate for rotated-90 mode
+  if (isRotated90) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      this.internal.write('/Rotate 90')
+    })
+  }
+
+  // Register page-level /Rotate 180 for single-sided rotatePage180
+  let hasRotatePageEvent = false
+  if (config.rotatePage180 && (config.printMode === 'front-only' || config.printMode === 'back-only')) {
+    const rotateValue = isRotated90 ? 270 : 180
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      this.internal.write(`/Rotate ${rotateValue}`)
+    })
+    hasRotatePageEvent = true
+  }
+
+  // Track back page numbers for duplex rotate-page-180.
+  // The set is populated by renderSheetToExistingPDF as pages are added.
+  const backPageNumbers = new Set<number>()
+
+  if (config.duplexBack === 'rotate-page-180') {
+    const rotateValue = isRotated90 ? 270 : 180
+    let putPageCounter = 0
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ; (pdf as any).internal.events.subscribe('putPage', function (this: any) {
+      putPageCounter++
+      if (backPageNumbers.has(putPageCounter)) {
+        this.internal.write(`/Rotate ${rotateValue}`)
+      }
+    })
+  }
+
+  return { pdf, pageCount: 0, isRotated90, hasRotatePageEvent, backPageNumbers }
+}
+
+/**
+ * Render one complete physical sheet into an existing PDF handle.
+ *
+ * A physical sheet is:
+ * - Single-sided (front-only/back-only): 1 page with up to cardsPerPage cards
+ * - Duplex: 2 pages (front + back) with up to cardsPerPage students
+ * - Side-by-side: 1 page with front+back pairs
+ *
+ * Returns the number of PDF pages added.
+ */
+export async function renderSheetToExistingPDF(
+  handle: VectorPDFHandle,
+  design: Design,
+  sheetMembers: Member[],
+  globalMemberOffset: number,
+  config: PrintConfig,
+  layout: import('@/lib/print-layout').PageLayout,
+  isPortal: boolean,
+  _pageOffsetInBatch: number,
+): Promise<number> {
+  const { pdf, isRotated90 } = handle
+  const cardConfig = design.cardConfiguration
+  const frontDoc = design.frontDocument
+  const backDoc = design.backDocument
+
+  // Build the effective config for rotated-90 (same logic as generateVectorPDF)
+  const effectiveConfig: PrintConfig = isRotated90
+    ? {
+      ...config,
+      layoutMode: (config.autoLayout ? 'automatic' : 'custom') as import('@/lib/print-layout').LayoutMode,
+      orientation: 'landscape' as const,
+      gutterH: config.gutterV,
+      gutterV: config.gutterH,
+      rows: config.columns,
+      columns: config.rows,
+      margins: {
+        left: config.margins.top,
+        right: config.margins.bottom,
+        top: config.margins.right,
+        bottom: config.margins.left,
+      },
+      frontAdjustment: {
+        offsetX: config.frontAdjustment.offsetY,
+        offsetY: -config.frontAdjustment.offsetX,
+        rotation: config.frontAdjustment.rotation,
+      },
+      backAdjustment: {
+        offsetX: config.backAdjustment.offsetY,
+        offsetY: -config.backAdjustment.offsetX,
+        rotation: config.backAdjustment.rotation,
+      },
+    }
+    : config
+
+  const pagesRendered: number[] = []
+
+  // Determine the pages this sheet produces
+  const { cardsPerPage, slots } = layout
+
+  if (config.printMode === 'front-only' || config.printMode === 'back-only') {
+    // Single page per sheet
+    const side = config.printMode === 'back-only' ? 'back' : 'front'
+    const cardDoc = side === 'back' ? backDoc : frontDoc
+
+    if (handle.pageCount > 0) pdf.addPage()
+    handle.pageCount++
+    _currentVectorPageIndex = handle.pageCount - 1
+
+    const adj = side === 'back' ? effectiveConfig.backAdjustment : effectiveConfig.frontAdjustment
+    const hasAdj = adj.offsetX !== 0 || adj.offsetY !== 0 || adj.rotation !== 0
+    if (hasAdj) {
+      pdf.saveGraphicsState()
+      if (adj.rotation !== 0) {
+        const cx = layout.pageW / 2
+        const cy = layout.pageH / 2
+        const rad = (adj.rotation * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        pdf.setCurrentTransformationMatrix(
+          pdf.Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos),
+        )
+      }
+    }
+
+    for (let j = 0; j < sheetMembers.length; j++) {
+      const member = sheetMembers[j]
+      if (!member) continue
+      const slot = slots[j]
+      if (!slot) continue
+
+      const drawX = slot.x + adj.offsetX
+      const drawY = slot.y + adj.offsetY
+
+      await renderCardVectorAtSlot(pdf, cardDoc, cardConfig, member, drawX, drawY, slot.w, slot.h, false)
+
+      if (isPortal) drawVectorWatermark(pdf, drawX, drawY, slot.w, slot.h)
+      if (config.cardBorders) drawCardBorder(pdf, drawX, drawY, slot.w, slot.h)
+      if (config.cropMarks) drawCropMarks(pdf, drawX, drawY, slot.w, slot.h)
+    }
+
+    if (hasAdj && adj.rotation !== 0) pdf.restoreGraphicsState()
+    pagesRendered.push(handle.pageCount - 1)
+
+  } else if (config.printMode === 'duplex') {
+    // Two pages per sheet: front then back
+    const backSlots = computeBackSlots(slots, layout.rows, layout.cols, config.duplexBack)
+
+    // ── Front page ──
+    if (handle.pageCount > 0) pdf.addPage()
+    handle.pageCount++
+    _currentVectorPageIndex = handle.pageCount - 1
+
+    const frontAdj = effectiveConfig.frontAdjustment
+    const hasFrontAdj = frontAdj.offsetX !== 0 || frontAdj.offsetY !== 0 || frontAdj.rotation !== 0
+    if (hasFrontAdj) {
+      pdf.saveGraphicsState()
+      if (frontAdj.rotation !== 0) {
+        const cx = layout.pageW / 2
+        const cy = layout.pageH / 2
+        const rad = (frontAdj.rotation * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        pdf.setCurrentTransformationMatrix(
+          pdf.Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos),
+        )
+      }
+    }
+
+    for (let j = 0; j < sheetMembers.length; j++) {
+      const member = sheetMembers[j]
+      if (!member) continue
+      const slot = slots[j]
+      if (!slot) continue
+
+      const drawX = slot.x + frontAdj.offsetX
+      const drawY = slot.y + frontAdj.offsetY
+
+      await renderCardVectorAtSlot(pdf, frontDoc, cardConfig, member, drawX, drawY, slot.w, slot.h, false)
+
+      if (isPortal) drawVectorWatermark(pdf, drawX, drawY, slot.w, slot.h)
+      if (config.cardBorders) drawCardBorder(pdf, drawX, drawY, slot.w, slot.h)
+      if (config.cropMarks) drawCropMarks(pdf, drawX, drawY, slot.w, slot.h)
+    }
+
+    if (hasFrontAdj && frontAdj.rotation !== 0) pdf.restoreGraphicsState()
+    pagesRendered.push(handle.pageCount - 1)
+
+    // ── Back page ──
+    pdf.addPage()
+    handle.pageCount++
+    _currentVectorPageIndex = handle.pageCount - 1
+
+    // Register this page as a back page for rotate-page-180 event handler
+    if (config.duplexBack === 'rotate-page-180') {
+      handle.backPageNumbers.add(handle.pageCount)
+    }
+
+    const backAdj = effectiveConfig.backAdjustment
+    const hasBackAdj = backAdj.offsetX !== 0 || backAdj.offsetY !== 0 || backAdj.rotation !== 0
+    if (hasBackAdj) {
+      pdf.saveGraphicsState()
+      if (backAdj.rotation !== 0) {
+        const cx = layout.pageW / 2
+        const cy = layout.pageH / 2
+        const rad = (backAdj.rotation * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        pdf.setCurrentTransformationMatrix(
+          pdf.Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos),
+        )
+      }
+    }
+
+    for (let j = 0; j < sheetMembers.length; j++) {
+      const member = sheetMembers[j]
+      if (!member) continue
+      const bSlot = backSlots[j]
+      if (!bSlot) continue
+
+      const drawX = bSlot.x + backAdj.offsetX
+      const drawY = bSlot.y + backAdj.offsetY
+
+      await renderCardVectorAtSlot(pdf, backDoc, cardConfig, member, drawX, drawY, bSlot.w, bSlot.h, false)
+
+      if (isPortal) drawVectorWatermark(pdf, drawX, drawY, bSlot.w, bSlot.h)
+      if (config.cardBorders) drawCardBorder(pdf, drawX, drawY, bSlot.w, bSlot.h)
+      if (config.cropMarks) drawCropMarks(pdf, drawX, drawY, bSlot.w, bSlot.h)
+    }
+
+    if (hasBackAdj && backAdj.rotation !== 0) pdf.restoreGraphicsState()
+    pagesRendered.push(handle.pageCount - 1)
+
+  } else {
+    // Side-by-side: one page per sheet, front + back pairs
+    if (handle.pageCount > 0) pdf.addPage()
+    handle.pageCount++
+    _currentVectorPageIndex = handle.pageCount - 1
+
+    const adj = effectiveConfig.frontAdjustment
+    const hasAdj = adj.offsetX !== 0 || adj.offsetY !== 0 || adj.rotation !== 0
+    if (hasAdj) {
+      pdf.saveGraphicsState()
+      if (adj.rotation !== 0) {
+        const cx = layout.pageW / 2
+        const cy = layout.pageH / 2
+        const rad = (adj.rotation * Math.PI) / 180
+        const cos = Math.cos(rad)
+        const sin = Math.sin(rad)
+        pdf.setCurrentTransformationMatrix(
+          pdf.Matrix(cos, sin, -sin, cos, cx - cx * cos + cy * sin, cy - cx * sin - cy * cos),
+        )
+      }
+    }
+
+    for (let j = 0; j < sheetMembers.length; j++) {
+      const member = sheetMembers[j]
+      if (!member) continue
+      const slot = slots[j * 2] ?? slots[0]
+      if (!slot) continue
+
+      const drawX = slot.x + adj.offsetX
+      const drawY = slot.y + adj.offsetY
+
+      // Front card
+      await renderCardVectorAtSlot(pdf, frontDoc, cardConfig, member, drawX, drawY, slot.w, slot.h, false)
+      if (isPortal) drawVectorWatermark(pdf, drawX, drawY, slot.w, slot.h)
+      if (config.cardBorders) drawCardBorder(pdf, drawX, drawY, slot.w, slot.h)
+      if (config.cropMarks) drawCropMarks(pdf, drawX, drawY, slot.w, slot.h)
+
+      // Back card (side-by-side)
+      const backAdj = effectiveConfig.backAdjustment
+      const backX = slot.x + slot.w + config.gutterH + backAdj.offsetX
+      const backY = slot.y + backAdj.offsetY
+
+      if (backX + slot.w <= layout.pageW - config.margins.right) {
+        await renderCardVectorAtSlot(pdf, backDoc, cardConfig, member, backX, backY, slot.w, slot.h, false)
+        if (isPortal) drawVectorWatermark(pdf, backX, backY, slot.w, slot.h)
+        if (config.cardBorders) drawCardBorder(pdf, backX, backY, slot.w, slot.h)
+        if (config.cropMarks) drawCropMarks(pdf, backX, backY, slot.w, slot.h)
+      }
+    }
+
+    if (hasAdj && adj.rotation !== 0) pdf.restoreGraphicsState()
+    pagesRendered.push(handle.pageCount - 1)
+  }
+
+  // Yield to main thread after each sheet
+  await new Promise((r) => setTimeout(r, 0))
+
+  return pagesRendered.length
+}
+
+/**
+ * Finalise a batch PDF and return it as a Blob.
+ *
+ * If PDF backgrounds were recorded during rendering, post-processes
+ * the output with pdf-lib to embed them (Phase 3 compatibility).
+ */
+export async function finalizePDFAsBlob(handle: VectorPDFHandle): Promise<Blob> {
+  const { pdf } = handle
+
+  // Phase 3: If any PDF backgrounds were recorded, post-process with pdf-lib
+  if (_pdfBackgrounds.length > 0) {
+    try {
+      const jsPdfBytes = pdf.output('arraybuffer') as ArrayBuffer
+      const finalBytes = await embedPdfBackgrounds(jsPdfBytes, _pdfBackgrounds)
+      _pdfBackgrounds = []
+      return new Blob([finalBytes], { type: 'application/pdf' })
+    } catch (err) {
+      console.warn('[vector-pdf] PDF background embedding failed, returning jsPDF output:', err)
+      _pdfBackgrounds = []
+      return pdf.output('blob')
+    }
+  }
+
+  _pdfBackgrounds = []
+  return pdf.output('blob')
 }
 
 // ---------------------------------------------------------------------------

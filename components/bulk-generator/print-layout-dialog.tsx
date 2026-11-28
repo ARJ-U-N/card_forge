@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
   ChevronLeftIcon,
@@ -57,6 +57,11 @@ import {
 } from '@/lib/print-layout'
 import { generateVectorPDF } from '@/lib/vector-pdf-renderer'
 import {
+  batchedVectorPDFExport,
+  isFileSystemAccessSupported,
+  shouldUseBatchedExport,
+} from '@/lib/vector-pdf-batch-export'
+import {
   createResolutionSession,
   isResolved,
   type ResolutionSession,
@@ -101,6 +106,8 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
   const [exportProgress, setExportProgress] = useState({ current: 0, total: 0, status: '' })
   const [cancelled, setCancelled] = useState(false)
   const [addWatermark, setAddWatermark] = useState(false)
+  /** Ref for cancellation — readable from async batched-export callbacks. */
+  const cancelledRef = useRef(false)
 
   // ── Presets ──────────────────────────────────────────────────────────
   const [presets, setPresets] = useState<PrintPreset[]>([])
@@ -297,29 +304,85 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
         renderMembers = members
       }
 
-      // 3. Generate vector PDF with (potentially overridden) member copies
-      const blob = await generateVectorPDF({
-        design,
-        members: renderMembers,
+      // 3. Check whether batched export should be used
+      const useBatching = shouldUseBatchedExport(
+        renderMembers.length,
         config,
-        renderedCards: cards,
-        onProgress: (c, t, s) => {
-          setExportProgress({ current: c, total: t, status: s })
-        },
-        isPortal: isPortal || addWatermark,
-      })
+        design.cardConfiguration.orientation,
+        customCardMm,
+      )
 
-      if (!cancelled) {
-        const url = URL.createObjectURL(blob)
-        const link = document.createElement('a')
-        const modePrefix = config.printMode === 'duplex' ? 'front-back-duplex' : config.printMode === 'side-by-side' ? 'front-back-side-by-side' : config.printMode
-        link.download = `${modePrefix}-id-cards-vector-${new Date().toISOString().slice(0, 10)}.pdf`
-        link.href = url
-        link.click()
-        URL.revokeObjectURL(url)
-        toast.success('Vector PDF exported successfully', {
-          description: `${renderMembers.length} cards rendered as vector elements.`,
+      if (useBatching && isFileSystemAccessSupported()) {
+        // ── Batched Vector PDF export (sheet-level adaptive) ──────
+        cancelledRef.current = false
+        setExportProgress({ current: 0, total: renderMembers.length, status: 'Select export folder…' })
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        let dirHandle: FileSystemDirectoryHandle
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          dirHandle = await (window as any).showDirectoryPicker({ mode: 'readwrite' })
+        } catch (pickerErr: unknown) {
+          if (pickerErr instanceof DOMException && pickerErr.name === 'AbortError') {
+            // User cancelled the folder picker — not an error
+            toast.info('Export cancelled')
+            return
+          }
+          throw pickerErr
+        }
+
+        const result = await batchedVectorPDFExport({
+          design,
+          members: renderMembers,
+          config,
+          renderedCards: cards,
+          isPortal: isPortal || addWatermark,
+          dirHandle,
+          isCancelled: () => cancelledRef.current,
+          onProgress: (c, t, s) => {
+            setExportProgress({ current: c, total: t, status: s })
+          },
         })
+
+        if (result.success && !cancelledRef.current) {
+          toast.success('Vector PDF exported successfully', {
+            description: `${renderMembers.length} cards exported to "${result.batchFolder}" (${result.totalBatches} batch file${result.totalBatches > 1 ? 's' : ''}).`,
+          })
+        } else if (cancelledRef.current) {
+          toast.info('Export cancelled', {
+            description: result.batchFolder ? `Completed batch files preserved in "${result.batchFolder}".` : undefined,
+          })
+        } else {
+          toast.error('Vector PDF export failed', {
+            description: result.error || 'An error occurred during batch export.',
+            duration: 10000,
+          })
+        }
+      } else {
+        // ── Standard one-shot Vector PDF export ───────────────────
+        const blob = await generateVectorPDF({
+          design,
+          members: renderMembers,
+          config,
+          renderedCards: cards,
+          onProgress: (c, t, s) => {
+            setExportProgress({ current: c, total: t, status: s })
+          },
+          isPortal: isPortal || addWatermark,
+        })
+
+        if (!cancelled) {
+          const url = URL.createObjectURL(blob)
+          const link = document.createElement('a')
+          const modePrefix = config.printMode === 'duplex' ? 'front-back-duplex' : config.printMode === 'side-by-side' ? 'front-back-side-by-side' : config.printMode
+          link.download = `${modePrefix}-id-cards-vector-${new Date().toISOString().slice(0, 10)}.pdf`
+          link.href = url
+          link.click()
+          URL.revokeObjectURL(url)
+          toast.success('Vector PDF exported successfully', {
+            description: `${renderMembers.length} cards rendered as vector elements.`,
+          })
+        }
       }
     } catch (error) {
       console.error(error)
@@ -350,6 +413,7 @@ export function PrintLayoutDialog({ cards, cardOrientation, cardWidthMm, cardHei
 
   const handleCancel = () => {
     setCancelled(true)
+    cancelledRef.current = true
     setExporting(false)
   }
 

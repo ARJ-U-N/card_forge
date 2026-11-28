@@ -5,6 +5,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { Toaster } from '@/components/ui/sonner'
 import { AuthProvider } from '@/components/providers/auth-provider'
 import { PortalProvider } from '@/components/providers/portal-provider'
+import { BrowserCompatibilityBanner } from '@/components/browser-compatibility-banner'
 import './globals.css'
 
 const _geistSans = Geist({ subsets: ['latin'] })
@@ -52,6 +53,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="bg-background">
       <body className="font-sans antialiased">
+        <BrowserCompatibilityBanner />
         <AuthProvider>
           <PortalProvider>
             <TooltipProvider>{children}</TooltipProvider>
